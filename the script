@@ -200,7 +200,11 @@ local destroyMinCircle
 local running = {
 	roll = false,
 	buy = false,
-	sell = false
+	sell = false,
+	gear = false,
+	airship = false,
+	events = false,
+	rewards = false
 }
 
 local stats = {
@@ -222,9 +226,13 @@ local lastSellToggle = 0
 local SELL_TOGGLE_DEBOUNCE = 0.35
 
 local lastHotkeyTime = {
-	R = 0,
-	B = 0,
-	S = 0
+	roll = 0,
+	buy = 0,
+	sell = 0,
+	gear = 0,
+	airship = 0,
+	events = 0,
+	rewards = 0
 }
 
 local HOTKEY_DEBOUNCE = 0.35
@@ -447,6 +455,15 @@ local rollEvent = nil
 local purchaseEvent = nil
 local sellEvent = nil
 
+local buyGearEvent = nil
+local buyAirshipFunction = nil
+local claimRewardEvent = nil
+local claimDailyEvent = nil
+local claimOfflineEvent = nil
+local claimGroupRewardEvent = nil
+local stormPickUpEvent = nil
+local throwEvent = nil
+
 local function getRemotesContainer()
 
 	local a =
@@ -535,40 +552,45 @@ local function tryRemote(name)
 	return nil
 end
 
+local function tryRemoteAny(name)
+	local container = getRemotesContainer()
+	if not container then return nil end
+
+	local direct = container:FindFirstChild(name)
+	if direct and (direct:IsA("RemoteEvent") or direct:IsA("RemoteFunction")) then
+		return direct
+	end
+
+	for _, obj in ipairs(container:GetDescendants()) do
+		if obj.Name == name and (obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction")) then
+			return obj
+		end
+	end
+
+	return nil
+end
+
 local function refreshRemotes()
+	rollEvent = tryRemote("requests.roll")
+	purchaseEvent = tryRemote("requests.purchase")
+	sellEvent = tryRemote("requests.sell")
 
-	rollEvent =
-		tryRemote(
-			"requests.roll"
-		)
-
-	purchaseEvent =
-		tryRemote(
-			"requests.purchase"
-		)
-
-	sellEvent =
-		tryRemote(
-			"requests.sell"
-		)
+	buyGearEvent = tryRemoteAny("requests.buy_gear")
+	buyAirshipFunction = tryRemoteAny("requests.buy_airship")
+	claimRewardEvent = tryRemoteAny("requests.claim_reward")
+	claimDailyEvent = tryRemoteAny("requests.claim_daily")
+	claimOfflineEvent = tryRemoteAny("requests.claim_offline")
+	claimGroupRewardEvent = tryRemoteAny("requests.claim_group_reward")
+	stormPickUpEvent = tryRemoteAny("requests.storm.pick_up")
+	throwEvent = tryRemoteAny("requests.throw")
 
 	if S and S.debug then
-
-		print(
-			"[nexus] remotes refreshed |"
-			.. " roll="
-			.. tostring(
-				rollEvent ~= nil
-			)
-			.. " buy="
-			.. tostring(
-				purchaseEvent ~= nil
-			)
-			.. " sell="
-			.. tostring(
-				sellEvent ~= nil
-			)
-		)
+		print("[nexus] remotes refreshed | roll="..tostring(rollEvent~=nil)
+			.." buy="..tostring(purchaseEvent~=nil)
+			.." sell="..tostring(sellEvent~=nil)
+			.." gear="..tostring(buyGearEvent~=nil)
+			.." airship="..tostring(buyAirshipFunction~=nil)
+			.." rewards="..tostring(claimRewardEvent~=nil or claimDailyEvent~=nil or claimOfflineEvent~=nil))
 	end
 end
 
@@ -629,7 +651,7 @@ local function loadCfg()
 		offlineRewards = true,
 		returnAfterTeleport = true,
 		binds = {
-			roll = "R", sell = "S", buy = "B", gear = "G", airship = "H", events = "V", rewards = "Y"
+			roll = "R", sell = "X", buy = "B", gear = "G", airship = "H", events = "V", rewards = "Y"
 		},
 
 		buySlots = {
@@ -797,7 +819,7 @@ local S = {
 	offlineRewards = raw.offlineRewards ~= false,
 	returnAfterTeleport = raw.returnAfterTeleport ~= false,
 	binds = type(raw.binds) == "table" and raw.binds or {
-		roll = "R", sell = "S", buy = "B", gear = "G", airship = "H", events = "V", rewards = "Y"
+		roll = "R", sell = "X", buy = "B", gear = "G", airship = "H", events = "V", rewards = "Y"
 	},
 
 	buySlots = raw.buySlots,
