@@ -1,5 +1,5 @@
 -- ═══════════════════════════════════════════════════════════════════════
---  NEXUS | AutoSell / AutoBuy / Gear / Airship | Fatality UI | v7.0.0
+--  NEXUS | AutoSell / AutoBuy | Fatality UI | v6.4.0
 --  FIX: AUTO BUY IS NOW COMPLETELY INDEPENDENT FROM AUTO ROLL
 --  AUTO BUY NEVER CALLS ROLL
 -- ═══════════════════════════════════════════════════════════════════════
@@ -180,18 +180,11 @@ local stopRoll
 local startBuy
 local stopBuy
 
-local startBuyGear
-local stopBuyGear
-
-local startBuyAirship
-local stopBuyAirship
-
 local startSell
 local stopSell
 
 local setSellEnabled
 local updateSlotsHint
-local updateToggleVisual
 
 local showUI
 local hideUI
@@ -199,7 +192,6 @@ local toggleUI
 
 local createMinCircle
 local destroyMinCircle
-local stopFly
 
 -- ═══════════════════════════════════════════════════════════════════════
 --  STATE
@@ -208,31 +200,23 @@ local stopFly
 local running = {
 	roll = false,
 	buy = false,
-	sell = false,
-	gear = false,
-	airship = false
+	sell = false
 }
 
 local stats = {
 	rolls = 0,
 	buys = 0,
-	gearBuys = 0,
-	airshipBuys = 0,
 	skips = 0,
 	sells = 0,
 	startTime = 0
 }
 
 local sellRunId = 0
-local gearRunId = 0
-local airshipRunId = 0
 
 local rollBusy = false
 
 local lastRollActivity = 0
 local lastBuyActivity = 0
-local lastGearActivity = 0
-local lastAirshipActivity = 0
 
 local lastSellToggle = 0
 local SELL_TOGGLE_DEBOUNCE = 0.35
@@ -240,9 +224,7 @@ local SELL_TOGGLE_DEBOUNCE = 0.35
 local lastHotkeyTime = {
 	R = 0,
 	B = 0,
-	S = 0,
-	G = 0,
-	M = 0,
+	S = 0
 }
 
 local HOTKEY_DEBOUNCE = 0.35
@@ -341,98 +323,6 @@ local CATEGORIES = {
 		kind = "Legs"
 	},
 }
-
-local GEAR_CATEGORIES = {
-	{
-		key = "oils",
-		label = "Oil Cans",
-		ids = {
-			"oil_common",
-			"oil_uncommon",
-			"oil_rare",
-			"oil_legendary",
-			"oil_prismatic",
-		}
-	},
-	{
-		key = "cells",
-		label = "Power Cells",
-		ids = {
-			"cell_common",
-			"cell_uncommon",
-			"cell_rare",
-			"cell_legendary",
-			"cell_prismatic",
-		}
-	},
-	{
-		key = "batteries",
-		label = "Backup Batteries",
-		ids = {
-			"battery_uncommon",
-			"battery_rare",
-			"battery_legendary",
-		}
-	},
-	{
-		key = "shards",
-		label = "Mutation Shards",
-		ids = {
-			"shard_prismatic",
-		}
-	}
-}
-
-local ALL_GEAR = {}
-local GEAR_BY_CAT = {}
-
-local function gearDisplay(id)
-	local names = {
-		oil_common = "Oil Can Common",
-		oil_uncommon = "Oil Can Uncommon",
-		oil_rare = "Oil Can Rare",
-		oil_legendary = "Oil Can Legendary",
-		oil_prismatic = "Oil Can Prismatic",
-		cell_common = "Power Cell Common",
-		cell_uncommon = "Power Cell Uncommon",
-		cell_rare = "Power Cell Rare",
-		cell_legendary = "Power Cell Legendary",
-		cell_prismatic = "Power Cell Prismatic",
-		battery_uncommon = "Backup Battery Uncommon",
-		battery_rare = "Backup Battery Rare",
-		battery_legendary = "Backup Battery Legendary",
-		shard_prismatic = "Prismatic Mutation Shard",
-	}
-	return names[id] or id
-end
-
-for _, cat in ipairs(GEAR_CATEGORIES) do
-	GEAR_BY_CAT[cat.key] = {}
-	for _, id in ipairs(cat.ids) do
-		table.insert(ALL_GEAR, {
-			id = id,
-			cat = cat.key,
-			name = gearDisplay(id)
-		})
-		table.insert(GEAR_BY_CAT[cat.key], id)
-	end
-end
-
-local GEAR_TIER_COLORS = {
-	common = Color3.fromRGB(140, 140, 150),
-	uncommon = Color3.fromRGB(80, 220, 120),
-	rare = Color3.fromRGB(70, 130, 240),
-	legendary = Color3.fromRGB(240, 200, 80),
-	prismatic = Color3.fromRGB(180, 110, 220),
-}
-
-local function gearTier(id)
-	return id:match("_(common)$")
-		or id:match("_(uncommon)$")
-		or id:match("_(rare)$")
-		or id:match("_(legendary)$")
-		or id:match("_(prismatic)$")
-end
 
 local TIER_COLORS = {
 	dirt     = Color3.fromRGB(120,90,60),
@@ -556,8 +446,6 @@ end
 local rollEvent = nil
 local purchaseEvent = nil
 local sellEvent = nil
-local gearBuyEvent = nil
-local airshipBuyEvent = nil
 
 local function getRemotesContainer()
 
@@ -624,9 +512,8 @@ local function tryRemote(name)
 		container:FindFirstChild(name)
 
 	if direct
-		and (
-			direct:IsA("RemoteEvent")
-			or direct:IsA("RemoteFunction")
+		and direct:IsA(
+			"RemoteEvent"
 		) then
 
 		return direct
@@ -637,9 +524,8 @@ local function tryRemote(name)
 	) do
 
 		if obj.Name == name
-			and (
-				obj:IsA("RemoteEvent")
-				or obj:IsA("RemoteFunction")
+			and obj:IsA(
+				"RemoteEvent"
 			) then
 
 			return obj
@@ -666,16 +552,6 @@ local function refreshRemotes()
 			"requests.sell"
 		)
 
-	gearBuyEvent =
-		tryRemote(
-			"requests.buy_gear"
-		)
-
-	airshipBuyEvent =
-		tryRemote(
-			"requests.buy_airship"
-		)
-
 	if S and S.debug then
 
 		print(
@@ -692,14 +568,6 @@ local function refreshRemotes()
 			.. tostring(
 				sellEvent ~= nil
 			)
-			.. " gear="
-			.. tostring(
-				gearBuyEvent ~= nil
-			)
-			.. " airship="
-			.. tostring(
-				airshipBuyEvent ~= nil
-			)
 		)
 	end
 end
@@ -709,33 +577,9 @@ local function remoteAlive(remote)
 	return
 		remote ~= nil
 		and remote.Parent ~= nil
-		and (
-			remote:IsA("RemoteEvent")
-			or remote:IsA("RemoteFunction")
+		and remote:IsA(
+			"RemoteEvent"
 		)
-end
-
-local function fireRemote(remote, ...)
-	if not remoteAlive(remote) then
-		return false, "remote unavailable"
-	end
-
-	local args = table.pack(...)
-
-	local ok, result = pcall(function()
-		if remote:IsA("RemoteFunction") then
-			return remote:InvokeServer(table.unpack(args, 1, args.n))
-		end
-
-		remote:FireServer(table.unpack(args, 1, args.n))
-		return true
-	end)
-
-	if not ok then
-		return false, result
-	end
-
-	return true, result
 end
 
 -- ═══════════════════════════════════════════════════════════════════════
@@ -762,67 +606,6 @@ end
 local CFG_FILE =
 	"nexus_config.json"
 
-local CFG_DIR =
-	"nexus_configs"
-
-local DEFAULT_CFG_FILE =
-	CFG_DIR .. "/default.json"
-
-local function ensureConfigFolder()
-	if not makefolder then
-		return false
-	end
-
-	local ok, exists = pcall(function()
-		return isfolder and isfolder(CFG_DIR) == true
-	end)
-
-	if ok and exists then
-		return true
-	end
-
-	local made = pcall(function()
-		makefolder(CFG_DIR)
-	end)
-
-	return made
-end
-
-local function sanitizeConfigName(name)
-	name = tostring(name or "")
-	name = name:gsub("^%s+", ""):gsub("%s+$", "")
-	name = name:gsub("[^%w_%-% ]", "_")
-	name = name:gsub("%s+", "_")
-	if name == "" then
-		return nil
-	end
-	return name
-end
-
-local function configFilePath(name)
-	local safe = sanitizeConfigName(name)
-	if not safe then
-		return nil
-	end
-	return CFG_DIR .. "/" .. safe .. ".json"
-end
-
-local function readJsonFile(path)
-	if not path or not isfile or not isfile(path) then
-		return nil
-	end
-
-	local ok, data = pcall(function()
-		return HttpService:JSONDecode(readfile(path))
-	end)
-
-	if ok and type(data) == "table" then
-		return data
-	end
-
-	return nil
-end
-
 local function loadCfg()
 
 	local def = {
@@ -836,6 +619,18 @@ local function loadCfg()
 		autoSell = false,
 		autoGear = false,
 		autoAirship = false,
+		autoEvents = false,
+		autoRewards = false,
+		eventSnowman = false,
+		eventMeteor = false,
+		eventThunder = false,
+		playtimeRewards = true,
+		dailyRewards = true,
+		offlineRewards = true,
+		returnAfterTeleport = true,
+		binds = {
+			roll = "R", sell = "S", buy = "B", gear = "G", airship = "H", events = "V", rewards = "Y"
+		},
 
 		buySlots = {
 			[1] = true
@@ -846,7 +641,6 @@ local function loadCfg()
 		rollDelay = 0.40,
 		buyDelay = 0.08,
 		slotDelay = 0.00,
-		gearBuyDelay = 0.75,
 
 		sellDelay = 0.30,
 		sellEquipDelay = 0.15,
@@ -866,40 +660,47 @@ local function loadCfg()
         flySpeed = 50,
         fov = 70,
         menuBind = "RightShift",
-        rollBind = "R",
-        buyBind = "B",
-        sellBind = "V",
-        gearBind = "G",
-        miscBind = "M",
         accentName = "red",
         notifications = true,
         buyUnknown = false,
 	}
 
-	local d =
-		readJsonFile(DEFAULT_CFG_FILE)
+	if isfile
+		and isfile(CFG_FILE) then
 
-	if not d then
-		d = readJsonFile(CFG_FILE)
-	end
+		local ok,d =
+			pcall(function()
 
-	if d then
-		for k,v in pairs(d) do
-			def[k] = v
+				return HttpService:JSONDecode(
+					readfile(
+						CFG_FILE
+					)
+				)
+
+			end)
+
+		if ok
+			and type(d) == "table" then
+
+			for k,v in pairs(d) do
+				def[k] = v
+			end
+
+			if d.buySlot
+				and not d.buySlots then
+
+				def.buySlots = {
+					[tonumber(
+						d.buySlot
+					)] = true
+				}
+
+				def.buySlot = nil
+			end
+
+			def.afkSell = nil
 		end
-
-		if d.buySlot
-			and not d.buySlots then
-
-			def.buySlots = {
-				[tonumber(d.buySlot)] = true
-			}
-
-			def.buySlot = nil
-		end
 	end
-
-	def.afkSell = nil
 
 	if type(
 		def.buySlots
@@ -950,23 +751,19 @@ local function loadCfg()
 	return def
 end
 
-local function saveCfg(t, path)
-	if not writefile or not path then
-		return false
+local function saveCfg(t)
+
+	if writefile then
+
+		pcall(function()
+
+			writefile(
+				CFG_FILE,
+				HttpService:JSONEncode(t)
+			)
+
+		end)
 	end
-
-	if not ensureConfigFolder() then
-		return false
-	end
-
-	local ok = pcall(function()
-		writefile(
-			path,
-			HttpService:JSONEncode(t)
-		)
-	end)
-
-	return ok
 end
 
 local raw =
@@ -976,12 +773,11 @@ local S = {
 
 	sell = raw.sell,
 	buy = raw.buy,
-	gear = raw.gear,
+	gear = raw.gear or {},
 
 	collapsed = {
 		sell = {},
-		buy = {},
-		gear = {}
+		buy = {}
 	},
 
 	tab = "sell",
@@ -989,8 +785,20 @@ local S = {
 	autoRoll = false,
 	autoBuy = false,
 	autoSell = false,
-	autoGear = false,
-	autoAirship = false,
+	autoGear = raw.autoGear == true,
+	autoAirship = raw.autoAirship == true,
+	autoEvents = raw.autoEvents == true,
+	autoRewards = raw.autoRewards == true,
+	eventSnowman = raw.eventSnowman == true,
+	eventMeteor = raw.eventMeteor == true,
+	eventThunder = raw.eventThunder == true,
+	playtimeRewards = raw.playtimeRewards ~= false,
+	dailyRewards = raw.dailyRewards ~= false,
+	offlineRewards = raw.offlineRewards ~= false,
+	returnAfterTeleport = raw.returnAfterTeleport ~= false,
+	binds = type(raw.binds) == "table" and raw.binds or {
+		roll = "R", sell = "S", buy = "B", gear = "G", airship = "H", events = "V", rewards = "Y"
+	},
 
 	buySlots = raw.buySlots,
 
@@ -999,7 +807,6 @@ local S = {
 	rollDelay = raw.rollDelay,
 	buyDelay = math.min(tonumber(raw.buyDelay) or 0.08, 0.08),
 	slotDelay = 0.00,
-	gearBuyDelay = math.max(0.20, tonumber(raw.gearBuyDelay) or 0.75),
 
 	sellDelay = raw.sellDelay,
 	sellEquipDelay =
@@ -1024,11 +831,6 @@ local S = {
     flySpeed = tonumber(raw.flySpeed) or 50,
     fov = tonumber(raw.fov) or 70,
     menuBind = type(raw.menuBind) == "string" and raw.menuBind or "RightShift",
-    rollBind = type(raw.rollBind) == "string" and raw.rollBind or "R",
-    buyBind = type(raw.buyBind) == "string" and raw.buyBind or "B",
-    sellBind = type(raw.sellBind) == "string" and raw.sellBind or "V",
-    gearBind = type(raw.gearBind) == "string" and raw.gearBind or "G",
-    miscBind = type(raw.miscBind) == "string" and raw.miscBind or "M",
     accentName = type(raw.accentName) == "string" and raw.accentName or "red",
     notifications = raw.notifications ~= false,
     buyUnknown = raw.buyUnknown == true,
@@ -1091,50 +893,19 @@ local function menuBindName()
     return key.Name
 end
 
-local function actionBindName(action)
-    local name = ({
-        roll = S.rollBind,
-        buy = S.buyBind,
-        sell = S.sellBind,
-        gear = S.gearBind,
-        misc = S.miscBind,
-    })[action]
+local function persist()
 
-    return keyCodeFromName(name).Name
-end
-
-local function setActionBind(action, key)
-    if not key or key == Enum.KeyCode.Unknown then
-        return
-    end
-
-    local name = key.Name
-
-    if action == "roll" then
-        S.rollBind = name
-    elseif action == "buy" then
-        S.buyBind = name
-    elseif action == "sell" then
-        S.sellBind = name
-    elseif action == "gear" then
-        S.gearBind = name
-    elseif action == "misc" then
-        S.miscBind = name
-    elseif action == "menu" then
-        S.menuBind = name
-    end
-end
-
-local function serializeSettings()
 	local cleanSlots = {}
 
 	for i = 1,5 do
+
 		if S.buySlots[i] then
 			cleanSlots[i] = true
 		end
 	end
 
-	return {
+	saveCfg({
+
 		sell = S.sell,
 		buy = S.buy,
 		gear = S.gear,
@@ -1142,8 +913,18 @@ local function serializeSettings()
 		autoRoll = false,
 		autoBuy = false,
 		autoSell = false,
-		autoGear = false,
-		autoAirship = false,
+		autoGear = S.autoGear,
+		autoAirship = S.autoAirship,
+		autoEvents = S.autoEvents,
+		autoRewards = S.autoRewards,
+		eventSnowman = S.eventSnowman,
+		eventMeteor = S.eventMeteor,
+		eventThunder = S.eventThunder,
+		playtimeRewards = S.playtimeRewards,
+		dailyRewards = S.dailyRewards,
+		offlineRewards = S.offlineRewards,
+		returnAfterTeleport = S.returnAfterTeleport,
+		binds = S.binds,
 
 		buySlots = cleanSlots,
 
@@ -1152,10 +933,10 @@ local function serializeSettings()
 		rollDelay = S.rollDelay,
 		buyDelay = S.buyDelay,
 		slotDelay = S.slotDelay,
-		gearBuyDelay = S.gearBuyDelay,
 
 		sellDelay = S.sellDelay,
-		sellEquipDelay = S.sellEquipDelay,
+		sellEquipDelay =
+			S.sellEquipDelay,
 
 		sniffer = S.sniffer,
 		sounds = S.sounds,
@@ -1163,39 +944,22 @@ local function serializeSettings()
 		roundRobin = S.roundRobin,
 		debug = S.debug,
 
-		filterByMarkers = S.filterByMarkers,
+		filterByMarkers =
+			S.filterByMarkers,
+
 		markers = S.markers,
+
 		myPlot = S.myPlot,
 
-		fly = S.fly,
-		flySpeed = S.flySpeed,
-		fov = S.fov,
-
-		menuBind = S.menuBind,
-		rollBind = S.rollBind,
-		buyBind = S.buyBind,
-		sellBind = S.sellBind,
-		gearBind = S.gearBind,
-		miscBind = S.miscBind,
-
-		accentName = S.accentName,
-		notifications = S.notifications,
-		buyUnknown = S.buyUnknown
-	}
+        fly = S.fly,
+        flySpeed = S.flySpeed,
+        fov = S.fov,
+        menuBind = S.menuBind,
+        accentName = S.accentName,
+        notifications = S.notifications,
+        buyUnknown = S.buyUnknown
+	})
 end
-
-local function persist()
-	local data = serializeSettings()
-
-	-- Keep the old single-file config compatible.
-	saveCfg(data, CFG_FILE)
-
-	-- "default" always means the latest settings.
-	saveCfg(data, DEFAULT_CFG_FILE)
-end
-
-local selectedConfigName = "default"
-local configNameDraft = "default"
 
 local function getSelectedSlots()
 
@@ -2123,7 +1887,7 @@ verLbl.Position =
 verLbl.BackgroundTransparency = 1
 
 verLbl.Text =
-	"v7.0.0"
+	"v6.4.0"
 
 verLbl.TextColor3 =
 	C.textMut
@@ -2336,7 +2100,7 @@ local function mkTab(
 	btn.Size =
 		UDim2.new(
 			0,
-			140,
+			112,
 			1,
 			0
 		)
@@ -2349,7 +2113,7 @@ local function mkTab(
 	btn.TextColor3 =
 		C.textDim
 
-	btn.TextSize = 13
+	btn.TextSize = 10
 	btn.Font = FONT_B
 
 	btn.BorderSizePixel = 0
@@ -2444,7 +2208,17 @@ mkTab(
 
 mkTab(
 	"airship",
-	"AUTO BUY AIRSHIP"
+	"AUTO BUY ALL"
+)
+
+mkTab(
+	"events",
+	"AUTO EVENTS"
+)
+
+mkTab(
+	"rewards",
+	"AUTO REWARDS"
 )
 
 mkTab(
@@ -2843,21 +2617,15 @@ mkToolBtn(
 	"UNSELECT ALL",
 	function()
 
-		if S.tab ~= "sell"
-			and S.tab ~= "buy"
-			and S.tab ~= "gear"
-		then
-			toast(
-				"Selection tools are for Sell / Buy / Gear.",
-				C.warn
-			)
-			return
-		end
+		local st =
+			S.tab == "sell"
+			and S.sell
+			or S.buy
 
-		local st, items =
-			activeSelectionTable()
+		for _,item in ipairs(
+			ALL
+		) do
 
-		for _,item in ipairs(items) do
 			st[item.id] = nil
 		end
 
@@ -2882,21 +2650,15 @@ mkToolBtn(
 	"SELECT ALL",
 	function()
 
-		if S.tab ~= "sell"
-			and S.tab ~= "buy"
-			and S.tab ~= "gear"
-		then
-			toast(
-				"Selection tools are for Sell / Buy / Gear.",
-				C.warn
-			)
-			return
-		end
+		local st =
+			S.tab == "sell"
+			and S.sell
+			or S.buy
 
-		local st, items =
-			activeSelectionTable()
+		for _,item in ipairs(
+			ALL
+		) do
 
-		for _,item in ipairs(items) do
 			st[item.id] = true
 		end
 
@@ -2947,11 +2709,10 @@ pad(
 
 local toggleVisuals = {}
 
-updateToggleVisual =
-	function(
-		name,
-		state
-	)
+local function updateToggleVisual(
+	name,
+	state
+)
 
 	local data =
 		toggleVisuals[name]
@@ -3724,33 +3485,7 @@ local function clearScroll()
 	end
 end
 
-local function activeSelectionTable()
-	if S.tab == "sell" then
-		return S.sell, ALL
-	elseif S.tab == "buy" then
-		return S.buy, ALL
-	elseif S.tab == "gear" then
-		return S.gear, ALL_GEAR
-	end
-
-	return S.sell, ALL
-end
-
 local function updateCounter()
-	if S.tab == "gear" then
-		local count = 0
-		for _ in pairs(S.gear) do
-			count += 1
-		end
-
-		counterLbl.Text =
-			("%d / %d"):format(
-				count,
-				#ALL_GEAR
-			)
-
-		return
-	end
 
 	local st =
 		S.tab == "sell"
@@ -3997,427 +3732,6 @@ local function mkCheckbox(
 	)
 
 	return row
-end
-
-
-local function mkGearCheckbox(
-	parent,
-	id,
-	stateTable
-)
-
-	local row =
-		Instance.new(
-			"Frame"
-		)
-
-	row.Size =
-		UDim2.new(
-			1,
-			0,
-			0,
-			22
-		)
-
-	row.BackgroundColor3 =
-		C.row
-
-	row.BackgroundTransparency =
-		0.4
-
-	row.BorderSizePixel = 0
-	row.Parent = parent
-
-	corner(row, 3)
-
-	local tier =
-		gearTier(id)
-
-	local strip =
-		Instance.new(
-			"Frame"
-		)
-
-	strip.Size =
-		UDim2.new(
-			0,
-			3,
-			1,
-			0
-		)
-
-	strip.BackgroundColor3 =
-		GEAR_TIER_COLORS[tier]
-		or C.accentD
-
-	strip.BorderSizePixel = 0
-	strip.Parent = row
-
-	corner(strip, 3)
-
-	local box =
-		Instance.new(
-			"Frame"
-		)
-
-	box.Size =
-		UDim2.new(
-			0,
-			14,
-			0,
-			14
-		)
-
-	box.Position =
-		UDim2.new(
-			0,
-			10,
-			0.5,
-			-7
-		)
-
-	box.BackgroundColor3 =
-		stateTable[id]
-		and C.accent
-		or C.box
-
-	box.BorderSizePixel = 0
-	box.Parent = row
-
-	corner(box, 3)
-
-	local check =
-		Instance.new(
-			"TextLabel"
-		)
-
-	check.Size =
-		UDim2.new(
-			1,
-			0,
-			1,
-			0
-		)
-
-	check.BackgroundTransparency = 1
-	check.Text = "✓"
-	check.TextColor3 =
-		Color3.fromRGB(
-			255,
-			255,
-			255
-		)
-
-	check.TextSize = 11
-	check.Font = FONT_B
-	check.Visible =
-		stateTable[id] == true
-
-	check.Parent = box
-
-	local lbl =
-		Instance.new(
-			"TextLabel"
-		)
-
-	lbl.Size =
-		UDim2.new(
-			1,
-			-40,
-			1,
-			0
-		)
-
-	lbl.Position =
-		UDim2.new(
-			0,
-			32,
-			0,
-			0
-		)
-
-	lbl.BackgroundTransparency = 1
-	lbl.Text = gearDisplay(id)
-	lbl.TextColor3 = C.text
-	lbl.TextSize = 12
-	lbl.Font = FONT_M
-	lbl.TextXAlignment =
-		Enum.TextXAlignment.Left
-
-	lbl.Parent = row
-
-	local btn =
-		Instance.new(
-			"TextButton"
-		)
-
-	btn.Size =
-		UDim2.new(
-			1,
-			0,
-			1,
-			0
-		)
-
-	btn.BackgroundTransparency = 1
-	btn.Text = ""
-	btn.Parent = row
-
-	trackConnection(
-		btn.MouseEnter:
-			Connect(function()
-				row.BackgroundColor3 = C.rowHov
-			end)
-	)
-
-	trackConnection(
-		btn.MouseLeave:
-			Connect(function()
-				row.BackgroundColor3 = C.row
-			end)
-	)
-
-	trackConnection(
-		btn.MouseButton1Click:
-			Connect(function()
-
-				stateTable[id] =
-					not stateTable[id]
-
-				box.BackgroundColor3 =
-					stateTable[id]
-					and C.accent
-					or C.box
-
-				check.Visible =
-					stateTable[id] == true
-
-				persist()
-				updateCounter()
-			end)
-	)
-
-	return row
-end
-
-local function mkGearCategory(
-	parent,
-	catKey,
-	label,
-	ids
-)
-
-	local filtered = {}
-
-	for _,id in ipairs(ids) do
-		if searchQuery == ""
-			or gearDisplay(id):lower():find(
-				searchQuery,
-				1,
-				true
-			)
-			or id:lower():find(
-				searchQuery,
-				1,
-				true
-			)
-		then
-			table.insert(filtered, id)
-		end
-	end
-
-	if #filtered == 0 then
-		return
-	end
-
-	local wrap =
-		Instance.new(
-			"Frame"
-		)
-
-	wrap.Size =
-		UDim2.new(
-			1,
-			0,
-			0,
-			0
-		)
-
-	wrap.AutomaticSize =
-		Enum.AutomaticSize.Y
-
-	wrap.BackgroundColor3 =
-		C.panel2
-
-	wrap.BackgroundTransparency =
-		0.3
-
-	wrap.BorderSizePixel = 0
-	wrap.Parent = parent
-
-	corner(wrap, 4)
-
-	local list =
-		Instance.new(
-			"UIListLayout"
-		)
-
-	list.SortOrder =
-		Enum.SortOrder.LayoutOrder
-
-	list.Padding =
-		UDim.new(
-			0,
-			4
-		)
-
-	list.Parent = wrap
-
-	local header =
-		Instance.new(
-			"Frame"
-		)
-
-	header.Size =
-		UDim2.new(
-			1,
-			0,
-			0,
-			28
-		)
-
-	header.BackgroundColor3 =
-		C.header
-
-	header.BorderSizePixel = 0
-	header.Parent = wrap
-
-	corner(header, 4)
-
-	local title =
-		Instance.new(
-			"TextLabel"
-		)
-
-	title.Size =
-		UDim2.new(
-			1,
-			-100,
-			1,
-			0
-		)
-
-	title.Position =
-		UDim2.new(
-			0,
-			12,
-			0,
-			0
-		)
-
-	title.BackgroundTransparency = 1
-	title.Text = label
-	title.TextColor3 = C.text
-	title.TextSize = 12
-	title.Font = FONT_B
-	title.TextXAlignment =
-		Enum.TextXAlignment.Left
-
-	title.Parent = header
-
-	local all =
-		Instance.new(
-			"TextButton"
-		)
-
-	all.Size =
-		UDim2.new(
-			0,
-			36,
-			0,
-			18
-		)
-
-	all.Position =
-		UDim2.new(
-			1,
-			-78,
-			0.5,
-			-9
-		)
-
-	all.BackgroundColor3 = C.row
-	all.Text = "ALL"
-	all.TextColor3 = C.ok
-	all.TextSize = 9
-	all.Font = FONT_B
-	all.BorderSizePixel = 0
-	all.AutoButtonColor = false
-	all.Parent = header
-
-	corner(all, 3)
-
-	local none =
-		Instance.new(
-			"TextButton"
-		)
-
-	none.Size =
-		UDim2.new(
-			0,
-			36,
-			0,
-			18
-		)
-
-	none.Position =
-		UDim2.new(
-			1,
-			-38,
-			0.5,
-			-9
-		)
-
-	none.BackgroundColor3 = C.row
-	none.Text = "NONE"
-	none.TextColor3 = C.textDim
-	none.TextSize = 9
-	none.Font = FONT_B
-	none.BorderSizePixel = 0
-	none.AutoButtonColor = false
-	none.Parent = header
-
-	corner(none, 3)
-
-	trackConnection(
-		all.MouseButton1Click:
-			Connect(function()
-				for _,id in ipairs(ids) do
-					S.gear[id] = true
-				end
-				persist()
-				rebuild()
-			end)
-	)
-
-	trackConnection(
-		none.MouseButton1Click:
-			Connect(function()
-				for _,id in ipairs(ids) do
-					S.gear[id] = nil
-				end
-				persist()
-				rebuild()
-			end)
-	)
-
-	for _,id in ipairs(filtered) do
-		mkGearCheckbox(
-			wrap,
-			id,
-			S.gear
-		)
-	end
 end
 
 local function mkCategory(
@@ -5448,31 +4762,15 @@ local function refreshStatus()
 		)
 	end
 
-	if running.gear then
-		table.insert(
-			parts,
-			"GEAR"
-		)
-	end
-
-	if running.airship then
-		table.insert(
-			parts,
-			"AIRSHIP"
-		)
-	end
-
 	if #parts == 0 then
 
 		setStatus(
 			(
-				"idle · sold:%d rolls:%d buys:%d gear:%d air:%d skips:%d"
+				"idle · sold:%d rolls:%d buys:%d skips:%d"
 			):format(
 				stats.sells,
 				stats.rolls,
 				stats.buys,
-				stats.gearBuys,
-				stats.airshipBuys,
 				stats.skips
 			),
 			C.textDim
@@ -5491,7 +4789,7 @@ local function refreshStatus()
 
 	setStatus(
 		(
-			"%s · sold:%d rolls:%d buys:%d gear:%d air:%d · %s"
+			"%s · sold:%d rolls:%d buys:%d · %s"
 		):format(
 			table.concat(
 				parts,
@@ -5500,8 +4798,6 @@ local function refreshStatus()
 			stats.sells,
 			stats.rolls,
 			stats.buys,
-			stats.gearBuys,
-			stats.airshipBuys,
 			t
 		),
 		C.ok
@@ -6029,452 +5325,6 @@ stopBuy =
 	end
 
 -- ═══════════════════════════════════════════════════════════════════════
---  AUTO BUY GEAR
--- ═══════════════════════════════════════════════════════════════════════
-
-local function autoBuyGearPass(
-	selectedItems,
-	workerId
-)
-
-	if not remoteAlive(gearBuyEvent) then
-		refreshRemotes()
-	end
-
-	if not remoteAlive(gearBuyEvent) then
-		return 0
-	end
-
-	local count = 0
-
-	for _,item in ipairs(
-		ALL_GEAR
-	) do
-
-		if
-			not runtimeAlive
-			or not running.gear
-			or workerId ~= gearRunId
-		then
-			break
-		end
-
-		if selectedItems[item.id] == true then
-
-			local ok =
-				fireRemote(
-					gearBuyEvent,
-					item.id,
-					1
-				)
-
-			if ok then
-				count += 1
-				stats.gearBuys += 1
-				lastGearActivity = tick()
-			end
-		end
-	end
-
-	return count
-end
-
-startBuyGear =
-	function()
-
-		if
-			not runtimeAlive
-			or running.gear
-		then
-			return
-		end
-
-		if not next(S.gear) then
-
-			toast(
-				"No gear selected for buy!",
-				C.warn
-			)
-
-			return
-		end
-
-		running.gear = true
-		gearRunId += 1
-
-		local workerId =
-			gearRunId
-
-		if stats.startTime == 0 then
-			stats.startTime =
-				tick()
-		end
-
-		toast(
-			"Auto Buy Gear ON",
-			C.ok
-		)
-
-		if S.sounds then
-			beep(
-				9118823102
-			)
-		end
-
-		updateToggleVisual(
-			"gear",
-			true
-		)
-
-		task.spawn(function()
-
-			while
-				runtimeAlive
-				and running.gear
-				and workerId == gearRunId
-			do
-
-				local ok,err =
-					xpcall(
-						function()
-
-							local selectedItems = {}
-
-							for id,value in pairs(
-								S.gear
-							) do
-
-								if value == true then
-									selectedItems[id] = true
-								end
-							end
-
-							autoBuyGearPass(
-								selectedItems,
-								workerId
-							)
-
-							task.wait(
-								math.max(
-									0.20,
-									tonumber(
-										S.gearBuyDelay
-									)
-									or 0.75
-								)
-							)
-						end,
-						debug.traceback
-					)
-
-				if not ok then
-
-					warn(
-						"[nexus] GEAR worker recovered:\n"
-						.. tostring(
-							err
-						)
-					)
-
-					task.wait(
-						0.5
-					)
-				end
-			end
-		end)
-	end
-
-stopBuyGear =
-	function()
-
-		gearRunId += 1
-		running.gear = false
-
-		updateToggleVisual(
-			"gear",
-			false
-		)
-
-		toast(
-			"Auto Buy Gear OFF",
-			C.textDim
-		)
-
-		if S.sounds then
-			beep(
-				9118823102
-			)
-		end
-	end
-
--- ═══════════════════════════════════════════════════════════════════════
---  AUTO BUY AIRSHIP
--- ═══════════════════════════════════════════════════════════════════════
-
-local AIRSHIP_VISIT_PERIOD = 4500
-local AIRSHIP_OPEN_DURATION = 900
-local AIRSHIP_OFFSET = 0
-
-local airshipAttemptWindow = nil
-local airshipAttempted = {}
-
-local function airshipVisitWindow(now)
-
-	now =
-		now
-		or os.time()
-
-	return math.floor(
-		(
-			now
-			+ AIRSHIP_OFFSET
-		)
-		/ AIRSHIP_VISIT_PERIOD
-	)
-end
-
-local function airshipOpen(
-	window,
-	now
-)
-
-	now =
-		now
-		or os.time()
-
-	local openAt =
-		(
-			window
-			+ 1
-		)
-		* AIRSHIP_VISIT_PERIOD
-		- AIRSHIP_OPEN_DURATION
-		- AIRSHIP_OFFSET
-
-	local closeAt =
-		(
-			window
-			+ 1
-		)
-		* AIRSHIP_VISIT_PERIOD
-		- AIRSHIP_OFFSET
-
-	return
-		now >= openAt
-		and now < closeAt
-end
-
-local function tryAirshipOffer(
-	window,
-	index
-)
-
-	if not remoteAlive(
-		airshipBuyEvent
-	) then
-
-		refreshRemotes()
-	end
-
-	if not remoteAlive(
-		airshipBuyEvent
-	) then
-		return false,
-			"remote unavailable"
-	end
-
-	return fireRemote(
-		airshipBuyEvent,
-		window,
-		index
-	)
-end
-
-local function autoBuyAirshipPass()
-
-	local now =
-		os.time()
-
-	local window =
-		airshipVisitWindow(
-			now
-		)
-
-	if not airshipOpen(
-		window,
-		now
-	) then
-		return 0
-	end
-
-	if
-		airshipAttemptWindow
-		~= window
-	then
-
-		airshipAttemptWindow =
-			window
-
-		table.clear(
-			airshipAttempted
-		)
-	end
-
-	local bought = 0
-
-	for index = 0,5 do
-
-		if
-			not runtimeAlive
-			or not running.airship
-		then
-			break
-		end
-
-		if not airshipAttempted[index] then
-
-			local ok,result =
-				tryAirshipOffer(
-					window,
-					index
-				)
-
-			if ok
-				and result ~= "declined"
-				and result ~= false
-			then
-
-				bought += 1
-				stats.airshipBuys += 1
-				lastAirshipActivity =
-					tick()
-
-				airshipAttempted[index] =
-					true
-
-			elseif ok then
-
-				-- "declined" stays retryable while the ship is open.
-				airshipAttempted[index] =
-					false
-			end
-
-			task.wait(
-				0.08
-			)
-		end
-	end
-
-	return bought
-end
-
-startBuyAirship =
-	function()
-
-		if
-			not runtimeAlive
-			or running.airship
-		then
-			return
-		end
-
-		running.airship = true
-		airshipRunId += 1
-
-		local workerId =
-			airshipRunId
-
-		if stats.startTime == 0 then
-			stats.startTime =
-				tick()
-		end
-
-		toast(
-			"Auto Buy Airship ON",
-			C.ok
-		)
-
-		if S.sounds then
-			beep(
-				9118823102
-			)
-		end
-
-		updateToggleVisual(
-			"airship",
-			true
-		)
-
-		task.spawn(function()
-
-			while
-				runtimeAlive
-				and running.airship
-				and workerId == airshipRunId
-			do
-
-				local ok,err =
-					xpcall(
-						function()
-
-							autoBuyAirshipPass()
-
-							task.wait(
-								2
-							)
-						end,
-						debug.traceback
-					)
-
-				if not ok then
-
-					warn(
-						"[nexus] AIRSHIP worker recovered:\n"
-						.. tostring(
-							err
-						)
-					)
-
-					task.wait(
-						0.5
-					)
-				end
-			end
-		end)
-	end
-
-stopBuyAirship =
-	function()
-
-		airshipRunId += 1
-		running.airship = false
-
-		airshipAttemptWindow =
-			nil
-
-		table.clear(
-			airshipAttempted
-		)
-
-		updateToggleVisual(
-			"airship",
-			false
-		)
-
-		toast(
-			"Auto Buy Airship OFF",
-			C.textDim
-		)
-
-		if S.sounds then
-			beep(
-				9118823102
-			)
-		end
-	end
-
-
--- ═══════════════════════════════════════════════════════════════════════
 --  EXTRA UI
 -- ═══════════════════════════════════════════════════════════════════════
 
@@ -6570,8 +5420,7 @@ local function setupFlyObjects(character)
     return hrp, humanoid
 end
 
-stopFly =
-function()
+local function stopFly()
     if flyConnection then
         pcall(function()
             flyConnection:Disconnect()
@@ -7126,524 +5975,69 @@ local function mkSlider(
     return row
 end
 
+local function mkActionBindRow(label, bindKey)
 
-local function mkActionBindRow(
-    label,
-    action,
-    getKey,
-    setKey
-)
-
-    local row =
-        Instance.new("Frame")
-
-    row.Size =
-        UDim2.new(
-            1,
-            0,
-            0,
-            34
-        )
-
+    local row = Instance.new("Frame")
+    row.Size = UDim2.new(1, 0, 0, 34)
     row.BackgroundColor3 = C.row
     row.BackgroundTransparency = 0.35
     row.BorderSizePixel = 0
     row.Parent = rightCol
-
     corner(row, 3)
 
-    local lbl =
-        Instance.new("TextLabel")
-
-    lbl.Size =
-        UDim2.new(
-            1,
-            -110,
-            1,
-            0
-        )
-
-    lbl.Position =
-        UDim2.new(
-            0,
-            8,
-            0,
-            0
-        )
-
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, -110, 1, 0)
+    lbl.Position = UDim2.new(0, 8, 0, 0)
     lbl.BackgroundTransparency = 1
     lbl.Text = label
     lbl.TextColor3 = C.text
     lbl.TextSize = 10
     lbl.Font = FONT_M
-    lbl.TextXAlignment =
-        Enum.TextXAlignment.Left
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
     lbl.Parent = row
 
-    local btn =
-        Instance.new("TextButton")
-
-    btn.Size =
-        UDim2.new(
-            0,
-            94,
-            0,
-            24
-        )
-
-    btn.Position =
-        UDim2.new(
-            1,
-            -102,
-            0.5,
-            -12
-        )
-
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(0, 94, 0, 24)
+    btn.Position = UDim2.new(1, -102, 0.5, -12)
     btn.BackgroundColor3 = C.bg
-    btn.Text = actionBindName(action)
+    btn.Text = tostring(S.binds[bindKey] or "NONE")
     btn.TextColor3 = C.accent
     btn.TextSize = 10
     btn.Font = FONT_B
     btn.BorderSizePixel = 0
     btn.AutoButtonColor = false
     btn.Parent = row
-
     corner(btn, 3)
 
     local waiting = false
     local conn
 
-    local function finish()
+    local function stopBinding()
         waiting = false
-
         if conn then
-            pcall(function()
-                conn:Disconnect()
-            end)
+            pcall(function() conn:Disconnect() end)
             conn = nil
         end
-
-        btn.Text = actionBindName(action)
+        btn.Text = tostring(S.binds[bindKey] or "NONE")
     end
 
-    trackConnection(
-        btn.MouseButton1Click:
-            Connect(function()
-
-                if waiting then
-                    return
-                end
-
-                waiting = true
-                btn.Text = "PRESS KEY"
-
-                conn =
-                    UserInputService.InputBegan:
-                        Connect(function(input)
-
-                            if
-                                input.UserInputType
-                                ~= Enum.UserInputType.Keyboard
-                            then
-                                return
-                            end
-
-                            local key =
-                                input.KeyCode
-
-                            if key ==
-                                Enum.KeyCode.Unknown
-                            then
-                                return
-                            end
-
-                            setKey(key)
-                            persist()
-                            finish()
-
-                            toast(
-                                label .. ": " .. key.Name,
-                                C.ok
-                            )
-                        end)
-
-                trackConnection(conn)
-            end)
-    )
+    trackConnection(btn.MouseButton1Click:Connect(function()
+        if waiting then return end
+        waiting = true
+        btn.Text = "PRESS KEY"
+        conn = UserInputService.InputBegan:Connect(function(input)
+            if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
+            if input.KeyCode == Enum.KeyCode.Unknown then return end
+            S.binds[bindKey] = input.KeyCode.Name
+            persist()
+            stopBinding()
+            toast(label .. ": " .. input.KeyCode.Name, C.ok)
+        end)
+        trackConnection(conn)
+    end))
 
     return row
 end
-
-local function listConfigNames()
-    local names = {
-        "default"
-    }
-
-    if listfiles and ensureConfigFolder() then
-        local ok, files =
-            pcall(function()
-                return listfiles(CFG_DIR)
-            end)
-
-        if ok and type(files) == "table" then
-            local seen = {
-                default = true
-            }
-
-            for _, path in ipairs(files) do
-                local name =
-                    tostring(path)
-                    :match(
-                        "([^/\\]+)%.json$"
-                    )
-
-                if name
-                    and not seen[name]
-                then
-                    seen[name] = true
-                    table.insert(
-                        names,
-                        name
-                    )
-                end
-            end
-        end
-    end
-
-    table.sort(
-        names,
-        function(a,b)
-            if a == "default" then
-                return true
-            end
-            if b == "default" then
-                return false
-            end
-            return a:lower() < b:lower()
-        end
-    )
-
-    return names
-end
-
-local function applyConfigData(data)
-    if type(data) ~= "table" then
-        return false
-    end
-
-    running.roll = false
-    running.buy = false
-    running.sell = false
-    running.gear = false
-    running.airship = false
-
-    sellRunId += 1
-    gearRunId += 1
-    airshipRunId += 1
-
-    S.sell = type(data.sell) == "table"
-        and data.sell
-        or {}
-
-    S.buy = type(data.buy) == "table"
-        and data.buy
-        or {}
-
-    S.gear = type(data.gear) == "table"
-        and data.gear
-        or {}
-
-    if type(data.buySlots) == "table" then
-        S.buySlots = {}
-
-        for k,v in pairs(data.buySlots) do
-            local n = tonumber(k)
-            if n and n >= 1 and n <= 5 and v then
-                S.buySlots[n] = true
-            end
-        end
-
-        if next(S.buySlots) == nil then
-            S.buySlots[1] = true
-        end
-    end
-
-    S.gameId = tonumber(data.gameId) or S.gameId
-    S.rollDelay = tonumber(data.rollDelay) or S.rollDelay
-    S.buyDelay =
-        math.min(
-            tonumber(data.buyDelay) or S.buyDelay,
-            0.08
-        )
-
-    S.slotDelay = tonumber(data.slotDelay) or 0
-    S.gearBuyDelay =
-        math.max(
-            0.20,
-            tonumber(data.gearBuyDelay)
-            or S.gearBuyDelay
-        )
-
-    S.sellDelay = tonumber(data.sellDelay) or S.sellDelay
-    S.sellEquipDelay =
-        tonumber(data.sellEquipDelay)
-        or S.sellEquipDelay
-
-    S.sniffer = data.sniffer == true
-    S.sounds = data.sounds ~= false
-    S.roundRobin = data.roundRobin == true
-    S.debug = data.debug == true
-    S.filterByMarkers =
-        data.filterByMarkers ~= false
-
-    S.markers =
-        type(data.markers) == "string"
-        and data.markers
-        or S.markers
-
-    S.myPlot =
-        tonumber(data.myPlot)
-        or S.myPlot
-
-    S.flySpeed =
-        tonumber(data.flySpeed)
-        or S.flySpeed
-
-    S.fov =
-        math.clamp(
-            tonumber(data.fov) or S.fov,
-            50,
-            120
-        )
-
-    S.menuBind =
-        type(data.menuBind) == "string"
-        and data.menuBind
-        or S.menuBind
-
-    S.rollBind =
-        type(data.rollBind) == "string"
-        and data.rollBind
-        or S.rollBind
-
-    S.buyBind =
-        type(data.buyBind) == "string"
-        and data.buyBind
-        or S.buyBind
-
-    S.sellBind =
-        type(data.sellBind) == "string"
-        and data.sellBind
-        or S.sellBind
-
-    S.gearBind =
-        type(data.gearBind) == "string"
-        and data.gearBind
-        or S.gearBind
-
-    S.miscBind =
-        type(data.miscBind) == "string"
-        and data.miscBind
-        or S.miscBind
-
-    S.accentName =
-        type(data.accentName) == "string"
-        and data.accentName
-        or S.accentName
-
-    S.notifications =
-        data.notifications ~= false
-
-    S.buyUnknown =
-        data.buyUnknown == true
-
-    applyAccentName(
-        S.accentName
-    )
-
-    S.fly = false
-
-    pcall(function()
-        setFOV(S.fov)
-    end)
-
-    return true
-end
-
-local function saveNamedConfig(name)
-    local safe = sanitizeConfigName(name)
-
-    if not safe then
-        toast(
-            "Config name is empty!",
-            C.warn
-        )
-        return false
-    end
-
-    local path =
-        configFilePath(safe)
-
-    if safe == "default" then
-        toast(
-            "Default is automatic. Use it for latest settings.",
-            C.warn
-        )
-        persist()
-        return true
-    end
-
-    if saveCfg(
-        serializeSettings(),
-        path
-    ) then
-
-        selectedConfigName = safe
-        configNameDraft = safe
-
-        -- Keep default synchronized with the current state.
-        persist()
-
-        toast(
-            "Config saved: " .. safe,
-            C.ok
-        )
-
-        return true
-    end
-
-    toast(
-        "Could not save config.",
-        C.err
-    )
-
-    return false
-end
-
-local function loadNamedConfig(name)
-    local safe =
-        sanitizeConfigName(name)
-
-    if not safe then
-        toast(
-            "Select a config first.",
-            C.warn
-        )
-        return false
-    end
-
-    local path =
-        configFilePath(safe)
-
-    local data =
-        readJsonFile(path)
-
-    if not data then
-        toast(
-            "Config not found: " .. safe,
-            C.err
-        )
-        return false
-    end
-
-    if applyConfigData(data) then
-        selectedConfigName = safe
-        configNameDraft = safe
-
-        persist()
-
-        if rebuild then
-            rebuild()
-        end
-
-        toast(
-            "Config loaded: " .. safe,
-            C.ok
-        )
-
-        return true
-    end
-
-    return false
-end
-
-local function deleteNamedConfig(name)
-    local safe =
-        sanitizeConfigName(name)
-
-    if not safe or safe == "default" then
-        toast(
-            "Default cannot be deleted.",
-            C.warn
-        )
-        return false
-    end
-
-    if not delfile then
-        toast(
-            "Config delete is unavailable.",
-            C.err
-        )
-        return false
-    end
-
-    local path =
-        configFilePath(safe)
-
-    local ok =
-        pcall(function()
-            if isfile(path) then
-                delfile(path)
-            end
-        end)
-
-    if not ok then
-        toast(
-            "Could not delete config.",
-            C.err
-        )
-        return false
-    end
-
-    selectedConfigName = "default"
-    configNameDraft = "default"
-
-    toast(
-        "Config deleted: " .. safe,
-        C.ok
-    )
-
-    if rebuild then
-        rebuild()
-    end
-
-    return true
-end
-
-local function ensureDefaultConfig()
-    local defaultData =
-        readJsonFile(
-            DEFAULT_CFG_FILE
-        )
-
-    if not defaultData then
-        local legacy =
-            readJsonFile(
-                CFG_FILE
-            )
-
-        if legacy then
-            saveCfg(
-                legacy,
-                DEFAULT_CFG_FILE
-            )
-        else
-            persist()
-        end
-    end
-end
-
-ensureDefaultConfig()
 
 local function mkMenuBindRow()
 
@@ -8203,147 +6597,106 @@ rebuildRight =
 
         elseif S.tab == "gear" then
 
-            sectionLabel(
-                "GEAR BUY MODE"
-            )
+            sectionLabel("AUTO BUY GEAR")
 
-            mkToggle(
-                "gear",
-                "Auto Buy Gear",
-                function()
-                    return running.gear
-                end,
-                function(value)
-                    if value then
-                        startBuyGear()
-                    else
-                        stopBuyGear()
-                    end
-                end
-            )
+            mkToggle("autoGear", "Auto Buy Gear", function()
+                return S.autoGear
+            end, function(value)
+                S.autoGear = value
+                persist()
+            end)
 
-            sectionLabel(
-                "TIMING"
-            )
-
-            mkNumberInput(
-                "Cycle",
-                function()
-                    return S.gearBuyDelay
-                end,
-                function(v)
-                    S.gearBuyDelay =
-                        math.max(
-                            0.20,
-                            tonumber(v) or 0.75
-                        )
-                    persist()
-                end
-            )
-
-            smallLabel(
-                "Selected gear is sent to requests.buy_gear."
-            )
+            mkInfoCard("GEAR SELECTION", "Gear selection UI is reserved here. The next pass will load the game's real Gear registry and purchase protocol.")
+            mkInfoCard("STATUS", "Menu stage only — no Gear purchases are triggered by this build.")
 
         elseif S.tab == "airship" then
 
-            sectionLabel(
-                "AIRSHIP BUY MODE"
-            )
+            sectionLabel("AIRSHIP")
 
-            mkToggle(
-                "airship",
-                "Auto Buy All",
-                function()
-                    return running.airship
-                end,
-                function(value)
-                    if value then
-                        startBuyAirship()
-                    else
-                        stopBuyAirship()
-                    end
-                end
-            )
-
-            local airshipStatus =
-                Instance.new("TextLabel")
-
-            airshipStatus.Size =
-                UDim2.new(
-                    1,
-                    0,
-                    0,
-                    44
-                )
-
-            airshipStatus.BackgroundColor3 =
-                C.row
-
-            airshipStatus.BackgroundTransparency =
-                0.4
-
-            airshipStatus.BorderSizePixel = 0
-            airshipStatus.TextColor3 = C.textDim
-            airshipStatus.TextSize = 10
-            airshipStatus.Font = FONT_M
-            airshipStatus.TextWrapped = true
-            airshipStatus.TextXAlignment =
-                Enum.TextXAlignment.Left
-            airshipStatus.TextYAlignment =
-                Enum.TextYAlignment.Center
-            airshipStatus.Parent = rightCol
-
-            corner(
-                airshipStatus,
-                3
-            )
-
-            task.spawn(function()
-                while
-                    runtimeAlive
-                    and airshipStatus.Parent
-                do
-                    local now = os.time()
-                    local window =
-                        airshipVisitWindow(now)
-
-                    if airshipOpen(
-                        window,
-                        now
-                    ) then
-                        airshipStatus.Text =
-                            "Airship: OPEN · auto-buy checks all 6 offers."
-                        airshipStatus.TextColor3 =
-                            C.ok
-                    else
-                        local openAt =
-                            (window + 1)
-                            * AIRSHIP_VISIT_PERIOD
-                            - AIRSHIP_OPEN_DURATION
-                            - AIRSHIP_OFFSET
-
-                        local left =
-                            math.max(
-                                0,
-                                openAt - now
-                            )
-
-                        airshipStatus.Text =
-                            "Airship: en route · opens in "
-                            .. fmtTime(left)
-
-                        airshipStatus.TextColor3 =
-                            C.textDim
-                    end
-
-                    task.wait(1)
-                end
+            mkToggle("autoAirship", "Auto Buy All", function()
+                return S.autoAirship
+            end, function(value)
+                S.autoAirship = value
+                persist()
             end)
 
-            smallLabel(
-                "Uses the game's 6-offer Airship window."
-            )
+            mkToggle("returnAfterTeleport", "Return after teleport", function()
+                return S.returnAfterTeleport
+            end, function(value)
+                S.returnAfterTeleport = value
+                persist()
+            end)
+
+            mkInfoCard("AUTO BUY ALL", "Airship automation controls will be added without changing this tab layout.")
+            mkInfoCard("TELEPORT", "The future Airship worker can use this option to restore the saved position after interaction.")
+
+        elseif S.tab == "events" then
+
+            sectionLabel("AUTO EVENTS")
+
+            mkToggle("autoEvents", "Auto Events", function()
+                return S.autoEvents
+            end, function(value)
+                S.autoEvents = value
+                persist()
+            end)
+
+            mkToggle("eventSnowman", "Snowman", function()
+                return S.eventSnowman
+            end, function(value)
+                S.eventSnowman = value
+                persist()
+            end)
+
+            mkToggle("eventMeteor", "Meteor", function()
+                return S.eventMeteor
+            end, function(value)
+                S.eventMeteor = value
+                persist()
+            end)
+
+            mkToggle("eventThunder", "Thunderstorm", function()
+                return S.eventThunder
+            end, function(value)
+                S.eventThunder = value
+                persist()
+            end)
+
+            mkInfoCard("EVENT WORKFLOW", "Snowman / Meteor / Thunderstorm are separated so each automation can later be switched independently.")
+
+        elseif S.tab == "rewards" then
+
+            sectionLabel("AUTO COLLECT REWARDS")
+
+            mkToggle("autoRewards", "Auto Collect Rewards", function()
+                return S.autoRewards
+            end, function(value)
+                S.autoRewards = value
+                persist()
+            end)
+
+            mkToggle("playtimeRewards", "Playtime Rewards", function()
+                return S.playtimeRewards
+            end, function(value)
+                S.playtimeRewards = value
+                persist()
+            end)
+
+            mkToggle("dailyRewards", "Daily Rewards", function()
+                return S.dailyRewards
+            end, function(value)
+                S.dailyRewards = value
+                persist()
+            end)
+
+            mkToggle("offlineRewards", "Offline Reward", function()
+                return S.offlineRewards
+            end, function(value)
+                S.offlineRewards = value
+                persist()
+            end)
+
+            mkInfoCard("REWARDS", "This tab is UI-only for now; claim workers are intentionally not wired yet.")
 
         elseif S.tab == "misc" then
 
@@ -8539,400 +6892,19 @@ rebuildRight =
                 ACCENTS.orange.main
             )
 
-            sectionLabel("KEYBINDS")
-
-            mkActionBindRow(
-                "Auto Sell",
-                "sell",
-                function()
-                    return S.sellBind
-                end,
-                function(key)
-                    setActionBind("sell", key)
-                end
-            )
-
-            mkActionBindRow(
-                "Auto Buy",
-                "buy",
-                function()
-                    return S.buyBind
-                end,
-                function(key)
-                    setActionBind("buy", key)
-                end
-            )
-
-            mkActionBindRow(
-                "Auto Buy Gear",
-                "gear",
-                function()
-                    return S.gearBind
-                end,
-                function(key)
-                    setActionBind("gear", key)
-                end
-            )
-
-            mkActionBindRow(
-                "Auto Roll",
-                "roll",
-                function()
-                    return S.rollBind
-                end,
-                function(key)
-                    setActionBind("roll", key)
-                end
-            )
-
-            mkActionBindRow(
-                "Misc tab",
-                "misc",
-                function()
-                    return S.miscBind
-                end,
-                function(key)
-                    setActionBind("misc", key)
-                end
-            )
-
             sectionLabel("MENU KEY")
 
             mkMenuBindRow()
 
-            sectionLabel("CONFIGS")
+            sectionLabel("FEATURE BINDS")
 
-            mkTextInput(
-                "Config name",
-                function()
-                    return configNameDraft
-                end,
-                function(v)
-                    configNameDraft = tostring(v or "")
-                end
-            )
-
-            local configRow =
-                Instance.new("Frame")
-
-            configRow.Size =
-                UDim2.new(
-                    1,
-                    0,
-                    0,
-                    26
-                )
-
-            configRow.BackgroundColor3 =
-                C.row
-
-            configRow.BackgroundTransparency =
-                0.35
-
-            configRow.BorderSizePixel = 0
-            configRow.Parent = rightCol
-
-            corner(
-                configRow,
-                3
-            )
-
-            local configArrow =
-                Instance.new("TextButton")
-
-            configArrow.Size =
-                UDim2.new(
-                    1,
-                    -8,
-                    1,
-                    -6
-                )
-
-            configArrow.Position =
-                UDim2.new(
-                    0,
-                    4,
-                    0,
-                    3
-                )
-
-            configArrow.BackgroundColor3 =
-                C.bg
-
-            configArrow.Text =
-                selectedConfigName
-                .. "  ▼"
-
-            configArrow.TextColor3 =
-                C.text
-
-            configArrow.TextSize = 10
-            configArrow.Font = FONT_M
-            configArrow.TextXAlignment =
-                Enum.TextXAlignment.Left
-
-            configArrow.BorderSizePixel = 0
-            configArrow.AutoButtonColor = false
-            configArrow.Parent =
-                configRow
-
-            corner(
-                configArrow,
-                3
-            )
-
-            local configList =
-                Instance.new("Frame")
-
-            configList.Size =
-                UDim2.new(
-                    1,
-                    0,
-                    0,
-                    0
-                )
-
-            configList.AutomaticSize =
-                Enum.AutomaticSize.Y
-
-            configList.BackgroundTransparency = 1
-            configList.Visible = false
-            configList.Parent = rightCol
-
-            local configListLayout =
-                Instance.new("UIListLayout")
-
-            configListLayout.SortOrder =
-                Enum.SortOrder.LayoutOrder
-
-            configListLayout.Padding =
-                UDim.new(
-                    0,
-                    3
-                )
-
-            configListLayout.Parent =
-                configList
-
-            local function rebuildConfigList()
-                for _, child in ipairs(
-                    configList:GetChildren()
-                ) do
-                    if not child:IsA(
-                        "UIListLayout"
-                    ) then
-                        child:Destroy()
-                    end
-                end
-
-                for _, name in ipairs(
-                    listConfigNames()
-                ) do
-
-                    local b =
-                        Instance.new(
-                            "TextButton"
-                        )
-
-                    b.Size =
-                        UDim2.new(
-                            1,
-                            0,
-                            0,
-                            24
-                        )
-
-                    b.BackgroundColor3 =
-                        name == selectedConfigName
-                        and C.accentD
-                        or C.row
-
-                    b.Text =
-                        name
-
-                    b.TextColor3 =
-                        name == selectedConfigName
-                        and Color3.fromRGB(
-                            255,
-                            255,
-                            255
-                        )
-                        or C.text
-
-                    b.TextSize = 10
-                    b.Font = FONT_M
-                    b.TextXAlignment =
-                        Enum.TextXAlignment.Left
-                    b.BorderSizePixel = 0
-                    b.AutoButtonColor = false
-                    b.Parent = configList
-
-                    corner(
-                        b,
-                        3
-                    )
-
-                    trackConnection(
-                        b.MouseButton1Click:
-                            Connect(function()
-                                selectedConfigName =
-                                    name
-
-                                configNameDraft =
-                                    name
-
-                                configArrow.Text =
-                                    name
-                                    .. "  ▼"
-
-                                configList.Visible =
-                                    false
-
-                                rebuildConfigList()
-                            end)
-                    )
-                end
-            end
-
-            rebuildConfigList()
-
-            trackConnection(
-                configArrow.MouseButton1Click:
-                    Connect(function()
-                        configList.Visible =
-                            not configList.Visible
-
-                        configArrow.Text =
-                            selectedConfigName
-                            .. (
-                                configList.Visible
-                                and "  ▲"
-                                or "  ▼"
-                            )
-                    end)
-            )
-
-            local cfgButtonsRow =
-                Instance.new("Frame")
-
-            cfgButtonsRow.Size =
-                UDim2.new(
-                    1,
-                    0,
-                    0,
-                    28
-                )
-
-            cfgButtonsRow.BackgroundTransparency = 1
-            cfgButtonsRow.Parent = rightCol
-
-            local cfgLayout =
-                Instance.new("UIListLayout")
-
-            cfgLayout.FillDirection =
-                Enum.FillDirection.Horizontal
-
-            cfgLayout.Padding =
-                UDim.new(
-                    0,
-                    4
-                )
-
-            cfgLayout.Parent =
-                cfgButtonsRow
-
-            local function cfgButton(
-                text,
-                callback
-            )
-                local b =
-                    Instance.new(
-                        "TextButton"
-                    )
-
-                b.Size =
-                    UDim2.new(
-                        0,
-                        78,
-                        1,
-                        0
-                    )
-
-                b.BackgroundColor3 =
-                    C.row
-
-                b.Text =
-                    text
-
-                b.TextColor3 =
-                    C.text
-
-                b.TextSize = 9
-                b.Font = FONT_B
-                b.BorderSizePixel = 0
-                b.AutoButtonColor = false
-                b.Parent =
-                    cfgButtonsRow
-
-                corner(
-                    b,
-                    3
-                )
-
-                trackConnection(
-                    b.MouseEnter:
-                        Connect(function()
-                            b.BackgroundColor3 =
-                                C.rowHov
-                        end)
-                )
-
-                trackConnection(
-                    b.MouseLeave:
-                        Connect(function()
-                            b.BackgroundColor3 =
-                                C.row
-                        end)
-                )
-
-                trackConnection(
-                    b.MouseButton1Click:
-                        Connect(callback)
-                )
-            end
-
-            cfgButton(
-                "SAVE CONFIG",
-                function()
-                    saveNamedConfig(
-                        configNameDraft
-                    )
-
-                    rebuildRight()
-                end
-            )
-
-            cfgButton(
-                "LOAD CONFIG",
-                function()
-                    loadNamedConfig(
-                        selectedConfigName
-                    )
-                end
-            )
-
-            cfgButton(
-                "DELETE CONFIG",
-                function()
-                    deleteNamedConfig(
-                        selectedConfigName
-                    )
-                end
-            )
-
-            smallLabel(
-                "Default always contains the latest settings. It cannot be deleted."
-            )
+            mkActionBindRow("Auto Roll", "roll")
+            mkActionBindRow("Auto Sell", "sell")
+            mkActionBindRow("Auto Buy", "buy")
+            mkActionBindRow("Auto Buy Gear", "gear")
+            mkActionBindRow("Auto Buy All / Airship", "airship")
+            mkActionBindRow("Auto Events", "events")
+            mkActionBindRow("Auto Rewards", "rewards")
 
             sectionLabel("GENERAL")
 
@@ -9006,33 +6978,27 @@ rebuild =
 
         elseif S.tab == "gear" then
 
-            for _,cat in ipairs(
-                GEAR_CATEGORIES
-            ) do
-
-                mkGearCategory(
-                    scroll,
-                    cat.key,
-                    cat.label,
-                    cat.ids
-                )
-            end
-
-            updateCounter()
+            counterLbl.Text = "gear"
+            mkInfoCard("AUTO BUY GEAR", "Choose the Gear automation tab here. Real Gear entries will be populated in the next pass from the game registry.")
+            mkInfoCard("READY", "Menu and tab navigation are ready; no purchase calls are made by this build.")
 
         elseif S.tab == "airship" then
 
-            counterLbl.Text = "6 offers"
+            counterLbl.Text = "airship"
+            mkInfoCard("AUTO BUY ALL", "Dedicated Airship / merchant automation page.")
+            mkInfoCard("RETURN", "Teleport-return option is preserved in the right panel.")
 
-            mkInfoCard(
-                "AUTO BUY AIRSHIP",
-                "Automatically buys all six Airship offers whenever the Airship shop is open."
-            )
+        elseif S.tab == "events" then
 
-            mkInfoCard(
-                "SCHEDULE",
-                "The game source uses a 4500-second visit period and a 900-second open window."
-            )
+            counterLbl.Text = "events"
+            mkInfoCard("AUTO EVENTS", "Separate controls for Snowman, Meteor and Thunderstorm.")
+            mkInfoCard("SAFE FLOW", "Event action logic is not started in this menu-only build.")
+
+        elseif S.tab == "rewards" then
+
+            counterLbl.Text = "rewards"
+            mkInfoCard("AUTO COLLECT REWARDS", "Dedicated page for Playtime, Daily and Offline reward collection.")
+            mkInfoCard("MENU FIRST", "Only the UI is wired here; claim requests come in the next pass.")
 
         elseif S.tab == "misc" then
 
@@ -9054,7 +7020,7 @@ rebuild =
 
             mkInfoCard(
                 "SETTINGS",
-                "Change the accent color and the menu hotkey without changing the legacy layout."
+                "Change accent, feature binds and the menu hotkey without changing the legacy layout."
             )
 
         end
@@ -9414,70 +7380,80 @@ local function hotkeyReady(key)
 end
 
 trackConnection(
-    UserInputService.InputBegan:
-        Connect(function(input,gp)
+	UserInputService.InputBegan:
+		Connect(function(input,gp)
 
-        if not runtimeAlive then
-            return
-        end
+		if not runtimeAlive then
+			return
+		end
 
-        if gp then
-            return
-        end
+		if gp then
+			return
+		end
 
-        if textboxFocused() then
-            return
-        end
+		if textboxFocused() then
+			return
+		end
+
+        local configuredMenuKey =
+            keyCodeFromName(
+                S.menuBind
+            )
 
         if
             input.KeyCode
-            == keyCodeFromName(S.menuBind)
+            == configuredMenuKey
         then
 
             toggleUI()
+
             return
         end
 
+		if
+			input.KeyCode
+			== Enum.KeyCode.R
+		then
+
+			if not hotkeyReady("R") then
+				return
+			end
+
+			if running.roll then
+				stopRoll()
+			else
+				startRoll()
+			end
+
+			return
+		end
+
+		if
+			input.KeyCode
+			== Enum.KeyCode.B
+		then
+
+			if not hotkeyReady("B") then
+				return
+			end
+
+			if running.buy then
+				stopBuy()
+			else
+				startBuy()
+			end
+
+			return
+		end
+
         if
             input.KeyCode
-            == keyCodeFromName(S.rollBind)
+            == Enum.KeyCode.S
         then
 
-            if not hotkeyReady("R") then
+            if S.fly then
                 return
             end
-
-            if running.roll then
-                stopRoll()
-            else
-                startRoll()
-            end
-
-            return
-        end
-
-        if
-            input.KeyCode
-            == keyCodeFromName(S.buyBind)
-        then
-
-            if not hotkeyReady("B") then
-                return
-            end
-
-            if running.buy then
-                stopBuy()
-            else
-                startBuy()
-            end
-
-            return
-        end
-
-        if
-            input.KeyCode
-            == keyCodeFromName(S.sellBind)
-        then
 
             if not hotkeyReady("S") then
                 return
@@ -9491,60 +7467,7 @@ trackConnection(
             return
         end
 
-        if
-            input.KeyCode
-            == keyCodeFromName(S.gearBind)
-        then
-
-            if not hotkeyReady("G") then
-                return
-            end
-
-            if running.gear then
-                stopBuyGear()
-            else
-                startBuyGear()
-            end
-
-            return
-        end
-
-        if
-            input.KeyCode
-            == keyCodeFromName(S.miscBind)
-        then
-
-            if not hotkeyReady("M") then
-                return
-            end
-
-            S.tab = "misc"
-
-            for k,t in pairs(
-                tabButtons
-            ) do
-                local active =
-                    k == "misc"
-
-                t.under.Visible =
-                    active
-
-                t.btn.TextColor3 =
-                    active
-                    and C.accent
-                    or C.textDim
-            end
-
-            showUI()
-
-            if rebuild then
-                rebuild()
-            end
-
-            return
-        end
-
-    end)
+	end)
 )
 
 -- ═══════════════════════════════════════════════════════════════════════
@@ -9568,16 +7491,6 @@ task.spawn(function()
 		updateToggleVisual(
 			"buy",
 			running.buy
-		)
-
-		updateToggleVisual(
-			"gear",
-			running.gear
-		)
-
-		updateToggleVisual(
-			"airship",
-			running.airship
 		)
 
 		task.wait(
@@ -9662,30 +7575,6 @@ task.spawn(function()
 				refreshRemotes()
 			end
 		end
-
-		if running.gear then
-
-			if
-				lastGearActivity > 0
-				and (
-					now
-					- lastGearActivity
-				) > 30
-			then
-
-				refreshRemotes()
-			end
-		end
-
-		if running.airship then
-
-			if not remoteAlive(
-				airshipBuyEvent
-			) then
-
-				refreshRemotes()
-			end
-		end
 	end
 end)
 
@@ -9712,12 +7601,8 @@ _G.NexusRuntime = {
 		running.roll = false
 		running.buy = false
 		running.sell = false
-		running.gear = false
-		running.airship = false
 
 		sellRunId += 1
-		gearRunId += 1
-		airshipRunId += 1
 
 		pcall(function()
 			stopSniffer()
@@ -9764,7 +7649,7 @@ print(
 )
 
 print(
-	"[nexus] loaded v7.0.0"
+	"[nexus] loaded v8.0.0-menu"
 )
 
 print(
@@ -9793,7 +7678,7 @@ print(
 )
 
 print(
-	"[nexus] UI: legacy black/red 900x680 + 6 tabs + scrolling right panel"
+	"[nexus] UI: legacy black/red 900x680 + 8-tab menu + scrolling right panel"
 )
 
 print(
