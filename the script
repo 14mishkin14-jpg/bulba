@@ -915,26 +915,15 @@ local function menuBindName()
     return key.Name
 end
 
-local function persist()
-
+local function buildConfigSnapshot()
 	local cleanSlots = {}
-
 	for i = 1,5 do
-
-		if S.buySlots[i] then
-			cleanSlots[i] = true
-		end
+		if S.buySlots[i] then cleanSlots[i] = true end
 	end
-
-	saveCfg({
-
+	return {
 		sell = S.sell,
 		buy = S.buy,
 		gear = S.gear,
-
-		autoRoll = false,
-		autoBuy = false,
-		autoSell = false,
 		autoGear = S.autoGear,
 		autoAirship = S.autoAirship,
 		autoEvents = S.autoEvents,
@@ -947,40 +936,150 @@ local function persist()
 		offlineRewards = S.offlineRewards,
 		returnAfterTeleport = S.returnAfterTeleport,
 		binds = S.binds,
-
 		buySlots = cleanSlots,
-
 		gameId = S.gameId,
-
 		rollDelay = S.rollDelay,
 		buyDelay = S.buyDelay,
 		slotDelay = S.slotDelay,
-
 		sellDelay = S.sellDelay,
-		sellEquipDelay =
-			S.sellEquipDelay,
-
+		sellEquipDelay = S.sellEquipDelay,
 		sniffer = S.sniffer,
 		sounds = S.sounds,
-
 		roundRobin = S.roundRobin,
 		debug = S.debug,
-
-		filterByMarkers =
-			S.filterByMarkers,
-
+		filterByMarkers = S.filterByMarkers,
 		markers = S.markers,
-
 		myPlot = S.myPlot,
+		fly = S.fly,
+		flySpeed = S.flySpeed,
+		fov = S.fov,
+		menuBind = S.menuBind,
+		accentName = S.accentName,
+		notifications = S.notifications,
+		buyUnknown = S.buyUnknown
+	}
+end
 
-        fly = S.fly,
-        flySpeed = S.flySpeed,
-        fov = S.fov,
-        menuBind = S.menuBind,
-        accentName = S.accentName,
-        notifications = S.notifications,
-        buyUnknown = S.buyUnknown
-	})
+local NAMED_CFG_DIR = "nexus_configs"
+
+local function ensureNamedConfigDir()
+	if makefolder and isfolder then
+		pcall(function()
+			if not isfolder(NAMED_CFG_DIR) then makefolder(NAMED_CFG_DIR) end
+		end)
+	end
+end
+
+local function sanitizeConfigName(name)
+	name = tostring(name or "")
+	name = name:gsub("[^%w_%- ]", "_"):gsub("%s+", "_"):gsub("_+", "_")
+	name = name:gsub("^_+", ""):gsub("_+$", "")
+	if name == "" then return "default" end
+	return name:sub(1,32)
+end
+
+local function namedConfigPath(name)
+	local safe = sanitizeConfigName(name)
+	if safe == "default" then return CFG_FILE end
+	return NAMED_CFG_DIR .. "/" .. safe .. ".json"
+end
+
+local function listNamedConfigs()
+	ensureNamedConfigDir()
+	local result = {"default"}
+	if not listfiles then return result end
+	local ok, files = pcall(function() return listfiles(NAMED_CFG_DIR) end)
+	if ok and type(files) == "table" then
+		for _, path in ipairs(files) do
+			local base = tostring(path):match("([^/\\]+)%.json$")
+			if base and base ~= "default" then table.insert(result, base) end
+		end
+	end
+	table.sort(result)
+	return result
+end
+
+local function saveNamedConfig(name)
+	ensureNamedConfigDir()
+	return pcall(function()
+		writefile(namedConfigPath(name), HttpService:JSONEncode(buildConfigSnapshot()))
+	end)
+end
+
+local function loadNamedConfig(name)
+	local path = namedConfigPath(name)
+	if not isfile or not isfile(path) then return false, "config not found" end
+	local ok, data = pcall(function() return HttpService:JSONDecode(readfile(path)) end)
+	if not ok or type(data) ~= "table" then return false, "invalid config" end
+
+	if type(data.sell) == "table" then S.sell = data.sell end
+	if type(data.buy) == "table" then S.buy = data.buy end
+	if type(data.gear) == "table" then S.gear = data.gear end
+	S.autoGear = data.autoGear == true
+	S.autoAirship = data.autoAirship == true
+	S.autoEvents = data.autoEvents == true
+	S.autoRewards = data.autoRewards == true
+	S.eventSnowman = data.eventSnowman == true
+	S.eventMeteor = data.eventMeteor == true
+	S.eventThunder = data.eventThunder == true
+	S.playtimeRewards = data.playtimeRewards ~= false
+	S.dailyRewards = data.dailyRewards ~= false
+	S.offlineRewards = data.offlineRewards ~= false
+	S.returnAfterTeleport = data.returnAfterTeleport ~= false
+
+	if type(data.binds) == "table" then
+		for _, key in ipairs({"roll","sell","buy","gear","airship","events","rewards"}) do
+			if type(data.binds[key]) == "string" then S.binds[key] = data.binds[key] end
+		end
+	end
+
+	if type(data.buySlots) == "table" then
+		S.buySlots = {}
+		for i = 1,5 do
+			S.buySlots[i] = data.buySlots[i] == true or data.buySlots[tostring(i)] == true
+		end
+	end
+
+	S.gameId = tonumber(data.gameId) or S.gameId
+	S.rollDelay = tonumber(data.rollDelay) or S.rollDelay
+	S.buyDelay = math.min(tonumber(data.buyDelay) or S.buyDelay, 0.08)
+	S.slotDelay = 0
+	S.sellDelay = tonumber(data.sellDelay) or S.sellDelay
+	S.sellEquipDelay = tonumber(data.sellEquipDelay) or S.sellEquipDelay
+	S.sounds = data.sounds ~= false
+	S.roundRobin = data.roundRobin == true
+	S.debug = data.debug == true
+	S.filterByMarkers = data.filterByMarkers ~= false
+	S.markers = type(data.markers) == "string" and data.markers or S.markers
+	S.myPlot = tonumber(data.myPlot) or S.myPlot
+	S.fly = data.fly == true
+	S.flySpeed = tonumber(data.flySpeed) or S.flySpeed
+	S.fov = tonumber(data.fov) or S.fov
+	S.menuBind = type(data.menuBind) == "string" and data.menuBind or S.menuBind
+	if type(data.accentName) == "string" then applyAccentName(data.accentName) end
+	S.notifications = data.notifications ~= false
+	S.buyUnknown = data.buyUnknown == true
+
+	return true
+end
+
+local function deleteNamedConfig(name)
+	local safe = sanitizeConfigName(name)
+	if safe == "default" then return false, "default cannot be deleted" end
+	local path = namedConfigPath(safe)
+	if not isfile or not isfile(path) then return false, "config not found" end
+	return pcall(function() delfile(path) end)
+end
+
+local function persist()
+	saveCfg(buildConfigSnapshot())
+	pcall(function()
+		ensureNamedConfigDir()
+		writefile(
+			NAMED_CFG_DIR .. "/default.json",
+			HttpService:JSONEncode(buildConfigSnapshot())
+		)
+	end)
 end
 
 local function getSelectedSlots()
