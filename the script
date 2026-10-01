@@ -5446,6 +5446,397 @@ stopBuy =
 	end
 
 -- ═══════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════
+--  FEATURE AUTOMATION WORKERS
+-- ═══════════════════════════════════════════════════════════════════════
+
+local function remoteEventFire(remote, ...)
+	if not remote or not remote.Parent or not remote:IsA("RemoteEvent") then
+		return false
+	end
+	return pcall(function()
+		remote:FireServer(...)
+	end)
+end
+
+local function remoteFunctionInvoke(remote, ...)
+	if not remote or not remote.Parent or not remote:IsA("RemoteFunction") then
+		return false
+	end
+	return pcall(function()
+		remote:InvokeServer(...)
+	end)
+end
+
+local function selectedGearItems()
+	local result = {}
+	for _, item in ipairs(ALL) do
+		if S.gear[item.id] == true then
+			table.insert(result, item.id)
+		end
+	end
+	return result
+end
+
+local function startGear()
+	if not runtimeAlive or running.gear then return end
+
+	local selected = selectedGearItems()
+	if #selected == 0 then
+		toast("No Gear selected!", C.warn)
+		return
+	end
+
+	refreshRemotes()
+	if not buyGearEvent then
+		toast("Gear remote not found", C.err)
+		return
+	end
+
+	running.gear = true
+	S.autoGear = true
+	persist()
+	updateToggleVisual("gear", true)
+	toast(("Auto Buy Gear ON · %d items"):format(#selected), C.ok)
+
+	task.spawn(function()
+		while runtimeAlive and running.gear do
+			local ok, err = xpcall(function()
+				selected = selectedGearItems()
+				if #selected == 0 then return end
+
+				if not buyGearEvent or buyGearEvent.Parent == nil then
+					refreshRemotes()
+				end
+
+				for _, id in ipairs(selected) do
+					if not runtimeAlive or not running.gear then break end
+					remoteEventFire(buyGearEvent, id, 1)
+					task.wait(0.08)
+				end
+			end, debug.traceback)
+
+			if not ok then
+				warn("[nexus] GEAR worker recovered:\n" .. tostring(err))
+				task.wait(0.5)
+			end
+
+			task.wait(1)
+		end
+	end)
+end
+
+local function stopGear()
+	if not running.gear then
+		updateToggleVisual("gear", false)
+		return
+	end
+
+	running.gear = false
+	S.autoGear = false
+	persist()
+	updateToggleVisual("gear", false)
+	toast("Auto Buy Gear OFF", C.textDim)
+end
+
+local function airshipOffset()
+	local offset = 0
+
+	pcall(function()
+		local a = workspace:GetAttribute("airship_offset")
+		if typeof(a) ~= "number" then a = workspace:GetAttribute("AirshipOffset") end
+		if typeof(a) ~= "number" then a = workspace:GetAttribute("airshipOffset") end
+		if typeof(a) == "number" then offset = a end
+	end)
+
+	return offset
+end
+
+local function airshipVisitWindow()
+	return math.floor((os.time() + airshipOffset()) / 4500)
+end
+
+local function airshipOpen()
+	return ((os.time() + airshipOffset()) % 4500) >= 3600
+end
+
+local function buyAllAirshipOffers()
+	refreshRemotes()
+
+	if not buyAirshipFunction
+		or not buyAirshipFunction:IsA("RemoteFunction")
+		or not airshipOpen()
+	then
+		return 0
+	end
+
+	local window = airshipVisitWindow()
+	local bought = 0
+
+	for slot = 0, 5 do
+		if not runtimeAlive or not running.airship then break end
+		if remoteFunctionInvoke(buyAirshipFunction, window, slot) then
+			bought += 1
+		end
+	end
+
+	return bought
+end
+
+local function startAirship()
+	if not runtimeAlive or running.airship then return end
+
+	refreshRemotes()
+	if not buyAirshipFunction then
+		toast("Airship remote not found", C.err)
+		return
+	end
+
+	running.airship = true
+	S.autoAirship = true
+	persist()
+	updateToggleVisual("airship", true)
+	toast("Auto Buy All ON", C.ok)
+
+	task.spawn(function()
+		while runtimeAlive and running.airship do
+			local ok, err = xpcall(function()
+				local count = buyAllAirshipOffers()
+				if count > 0 and S.debug then
+					print(("[nexus] airship: attempted %d offer(s)"):format(count))
+				end
+			end, debug.traceback)
+
+			if not ok then
+				warn("[nexus] AIRSHIP worker recovered:\n" .. tostring(err))
+				task.wait(0.5)
+			end
+
+			task.wait(8)
+		end
+	end)
+end
+
+local function stopAirship()
+	if not running.airship then
+		updateToggleVisual("airship", false)
+		return
+	end
+
+	running.airship = false
+	S.autoAirship = false
+	persist()
+	updateToggleVisual("airship", false)
+	toast("Auto Buy All OFF", C.textDim)
+end
+
+local function fireEventPrompts()
+	local count = 0
+
+	for _, obj in ipairs(workspace:GetDescendants()) do
+		if not runtimeAlive or not running.events then break end
+
+		if obj:IsA("ProximityPrompt") and obj.Enabled ~= false then
+			local action = tostring(obj.ActionText or ""):lower()
+			local hay = (
+				tostring(obj.Name)
+				.. " "
+				.. tostring(obj.Parent and obj.Parent.Name or "")
+				.. " "
+				.. tostring(obj:GetFullName())
+			):lower()
+
+			local allowed = false
+
+			if S.eventMeteor
+				and action == "collect"
+				and string.find(hay, "meteor", 1, true)
+			then
+				allowed = true
+			end
+
+			if S.eventThunder
+				and action == "pick up"
+				and (
+					string.find(hay, "storm", 1, true)
+					or string.find(hay, "tesla", 1, true)
+					or string.find(hay, "crate", 1, true)
+				)
+			then
+				allowed = true
+			end
+
+			if S.eventSnowman
+				and string.find(hay, "snowman", 1, true)
+			then
+				allowed = true
+			end
+
+			if allowed and triggerPrompt(obj) then
+				count += 1
+			end
+		end
+	end
+
+	return count
+end
+
+local function fireSnowballAtSnowman()
+	if not S.eventSnowman or not throwEvent then return 0 end
+
+	local character = LP.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if not root then return 0 end
+
+	local best, bestDist
+
+	for _, obj in ipairs(workspace:GetDescendants()) do
+		if obj:IsA("Model") and string.find(obj.Name:lower(), "snowman", 1, true) then
+			local primary = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart", true)
+			if primary then
+				local d = (primary.Position - root.Position).Magnitude
+				if d <= 200 and (bestDist == nil or d < bestDist) then
+					best = primary
+					bestDist = d
+				end
+			end
+		end
+	end
+
+	if not best then return 0 end
+
+	local origin = root.Position + Vector3.new(0, 2, 0)
+	return remoteEventFire(throwEvent, origin, best.Position) and 1 or 0
+end
+
+local function startEvents()
+	if not runtimeAlive or running.events then return end
+
+	if not S.eventMeteor and not S.eventThunder and not S.eventSnowman then
+		toast("Enable at least one event type", C.warn)
+		return
+	end
+
+	refreshRemotes()
+
+	running.events = true
+	S.autoEvents = true
+	persist()
+	updateToggleVisual("events", true)
+	toast("Auto Events ON", C.ok)
+
+	task.spawn(function()
+		while runtimeAlive and running.events do
+			local ok, err = xpcall(function()
+				local count = fireEventPrompts()
+				count += fireSnowballAtSnowman()
+				if count > 0 and S.debug then
+					print(("[nexus] events: triggered %d action(s)"):format(count))
+				end
+			end, debug.traceback)
+
+			if not ok then
+				warn("[nexus] EVENTS worker recovered:\n" .. tostring(err))
+				task.wait(0.5)
+			end
+
+			task.wait(0.6)
+		end
+	end)
+end
+
+local function stopEvents()
+	if not running.events then
+		updateToggleVisual("events", false)
+		return
+	end
+
+	running.events = false
+	S.autoEvents = false
+	persist()
+	updateToggleVisual("events", false)
+	toast("Auto Events OFF", C.textDim)
+end
+
+local function claimRewardsPass()
+	refreshRemotes()
+	local claimed = 0
+
+	if S.playtimeRewards and claimRewardEvent then
+		local indexes = {}
+		for i = 0, 11 do table.insert(indexes, i) end
+		if remoteEventFire(claimRewardEvent, indexes) then
+			claimed += 1
+		end
+	end
+
+	if S.dailyRewards and claimDailyEvent then
+		if remoteEventFire(claimDailyEvent) then
+			claimed += 1
+		end
+	end
+
+	if S.offlineRewards and claimOfflineEvent then
+		if remoteEventFire(claimOfflineEvent) then
+			claimed += 1
+		end
+	end
+
+	return claimed
+end
+
+local function startRewards()
+	if not runtimeAlive or running.rewards then return end
+
+	if not S.playtimeRewards and not S.dailyRewards and not S.offlineRewards then
+		toast("Enable at least one reward type", C.warn)
+		return
+	end
+
+	refreshRemotes()
+
+	running.rewards = true
+	S.autoRewards = true
+	persist()
+	updateToggleVisual("rewards", true)
+	toast("Auto Rewards ON", C.ok)
+
+	task.spawn(function()
+		while runtimeAlive and running.rewards do
+			local ok, err = xpcall(function()
+				claimRewardsPass()
+			end, debug.traceback)
+
+			if not ok then
+				warn("[nexus] REWARDS worker recovered:\n" .. tostring(err))
+				task.wait(0.5)
+			end
+
+			task.wait(5)
+		end
+	end)
+end
+
+local function stopRewards()
+	if not running.rewards then
+		updateToggleVisual("rewards", false)
+		return
+	end
+
+	running.rewards = false
+	S.autoRewards = false
+	persist()
+	updateToggleVisual("rewards", false)
+	toast("Auto Rewards OFF", C.textDim)
+end
+
+local function syncAutomationState()
+	if S.autoGear then startGear() else stopGear() end
+	if S.autoAirship then startAirship() else stopAirship() end
+	if S.autoEvents then startEvents() else stopEvents() end
+	if S.autoRewards then startRewards() else stopRewards() end
+end
+
 --  EXTRA UI
 -- ═══════════════════════════════════════════════════════════════════════
 
