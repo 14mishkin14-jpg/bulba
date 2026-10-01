@@ -1,0 +1,9820 @@
+-- ═══════════════════════════════════════════════════════════════════════
+--  NEXUS | AutoSell / AutoBuy / Gear / Airship | Fatality UI | v7.0.0
+--  FIX: AUTO BUY IS NOW COMPLETELY INDEPENDENT FROM AUTO ROLL
+--  AUTO BUY NEVER CALLS ROLL
+-- ═══════════════════════════════════════════════════════════════════════
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  HARD RESET OLD NEXUS INSTANCES
+-- ═══════════════════════════════════════════════════════════════════════
+
+local function hardResetOldNexus()
+
+	-- Shut down a previous modern runtime.
+	pcall(function()
+		local oldRuntime = rawget(_G, "NexusRuntime")
+
+		if oldRuntime and oldRuntime.shutdown then
+			oldRuntime.shutdown()
+		end
+	end)
+
+	-- Remove old GUI copies.
+	pcall(function()
+		local Players = game:GetService("Players")
+		local LP = Players.LocalPlayer
+
+		for _, parent in ipairs({
+			game:GetService("CoreGui"),
+			LP and LP:FindFirstChild("PlayerGui")
+		}) do
+			if parent then
+				local old =
+					parent:FindFirstChild(
+						"NexusAutoSellBuy"
+					)
+
+				if old then
+					old:Destroy()
+				end
+			end
+		end
+	end)
+
+	-- Try to remove stale old InputBegan connections.
+	pcall(function()
+
+		if not getconnections then
+			return
+		end
+
+		local UIS =
+			game:GetService(
+				"UserInputService"
+			)
+
+		for _, connection in ipairs(
+			getconnections(UIS.InputBegan)
+		) do
+
+			local fn = connection.Function
+
+			if fn and getupvalues then
+
+				local ok, ups =
+					pcall(
+						getupvalues,
+						fn
+					)
+
+				if ok and type(ups) == "table" then
+
+					local looksOld = false
+
+					for _, value in pairs(ups) do
+
+						if typeof(value) == "Instance" then
+							if value.Name ==
+								"NexusAutoSellBuy" then
+
+								looksOld = true
+								break
+							end
+						end
+					end
+
+					if looksOld then
+						pcall(function()
+							connection:Disconnect()
+						end)
+					end
+				end
+			end
+		end
+	end)
+end
+
+hardResetOldNexus()
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  RUNTIME
+-- ═══════════════════════════════════════════════════════════════════════
+
+local runtimeAlive = true
+local runtimeConnections = {}
+
+local function trackConnection(conn)
+	if conn then
+		table.insert(
+			runtimeConnections,
+			conn
+		)
+	end
+
+	return conn
+end
+
+local function disconnectAllConnections()
+	for i = #runtimeConnections, 1, -1 do
+		local conn =
+			runtimeConnections[i]
+
+		if conn then
+			pcall(function()
+				conn:Disconnect()
+			end)
+		end
+
+		runtimeConnections[i] = nil
+	end
+end
+
+local runtimeId =
+	tostring(os.clock())
+	.. "_"
+	.. tostring(
+		math.random(
+			100000,
+			999999
+		)
+	)
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  SERVICES
+-- ═══════════════════════════════════════════════════════════════════════
+
+local Players =
+	game:GetService("Players")
+
+local RS =
+	game:GetService("ReplicatedStorage")
+
+local UserInputService =
+	game:GetService("UserInputService")
+
+local HttpService =
+	game:GetService("HttpService")
+
+local RunService =
+	game:GetService("RunService")
+
+local TweenService =
+	game:GetService("TweenService")
+
+local VirtualUser =
+	game:GetService("VirtualUser")
+
+local LP =
+	Players.LocalPlayer
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  FORWARD DECLARATIONS
+-- ═══════════════════════════════════════════════════════════════════════
+
+local rebuild
+local rebuildRight
+
+local startRoll
+local stopRoll
+
+local startBuy
+local stopBuy
+
+local startBuyGear
+local stopBuyGear
+
+local startBuyAirship
+local stopBuyAirship
+
+local startSell
+local stopSell
+
+local setSellEnabled
+local updateSlotsHint
+local updateToggleVisual
+
+local showUI
+local hideUI
+local toggleUI
+
+local createMinCircle
+local destroyMinCircle
+local stopFly
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  STATE
+-- ═══════════════════════════════════════════════════════════════════════
+
+local running = {
+	roll = false,
+	buy = false,
+	sell = false,
+	gear = false,
+	airship = false
+}
+
+local stats = {
+	rolls = 0,
+	buys = 0,
+	gearBuys = 0,
+	airshipBuys = 0,
+	skips = 0,
+	sells = 0,
+	startTime = 0
+}
+
+local sellRunId = 0
+local gearRunId = 0
+local airshipRunId = 0
+
+local rollBusy = false
+
+local lastRollActivity = 0
+local lastBuyActivity = 0
+local lastGearActivity = 0
+local lastAirshipActivity = 0
+
+local lastSellToggle = 0
+local SELL_TOGGLE_DEBOUNCE = 0.35
+
+local lastHotkeyTime = {
+	R = 0,
+	B = 0,
+	S = 0,
+	G = 0,
+	M = 0,
+}
+
+local HOTKEY_DEBOUNCE = 0.35
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  THEME
+-- ═══════════════════════════════════════════════════════════════════════
+
+local C = {
+	bg      = Color3.fromRGB(15,15,18),
+	panel   = Color3.fromRGB(22,22,26),
+	panel2  = Color3.fromRGB(26,26,30),
+	row     = Color3.fromRGB(30,30,35),
+	rowHov  = Color3.fromRGB(42,42,48),
+	header  = Color3.fromRGB(18,18,22),
+
+	accent  = Color3.fromRGB(255,78,78),
+	accentD = Color3.fromRGB(150,45,45),
+
+	text    = Color3.fromRGB(230,230,230),
+	textDim = Color3.fromRGB(140,140,150),
+	textMut = Color3.fromRGB(90,90,100),
+
+	ok      = Color3.fromRGB(80,220,120),
+	warn    = Color3.fromRGB(240,180,60),
+	err     = Color3.fromRGB(240,90,90),
+	box     = Color3.fromRGB(70,70,80),
+}
+
+local FONT_B = Enum.Font.GothamBold
+local FONT_M = Enum.Font.Code
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  DATA
+-- ═══════════════════════════════════════════════════════════════════════
+
+local MATERIALS = {
+	"amethyst",
+	"ancient",
+	"astral",
+	"copper",
+	"crystal",
+	"demon",
+	"diamond",
+	"dirt",
+	"emerald",
+	"gear",
+	"golden",
+	"guardian",
+	"iron",
+	"magma",
+	"nature",
+	"quartz",
+	"royal",
+	"ruby",
+	"sapphire",
+	"stone",
+	"tesla",
+	"tree",
+	"void"
+}
+
+local CATEGORIES = {
+	{
+		key = "pickaxes",
+		suffix = "-pickaxe",
+		label = "Pickaxes",
+		kind = "Pickaxe"
+	},
+
+	{
+		key = "heads",
+		suffix = "-head",
+		label = "Heads",
+		kind = "Head"
+	},
+
+	{
+		key = "cores",
+		suffix = "-core",
+		label = "Cores",
+		kind = "Core"
+	},
+
+	{
+		key = "arms",
+		suffix = "-arms",
+		label = "Arms",
+		kind = "Arms"
+	},
+
+	{
+		key = "legs",
+		suffix = "-legs",
+		label = "Legs",
+		kind = "Legs"
+	},
+}
+
+local GEAR_CATEGORIES = {
+	{
+		key = "oils",
+		label = "Oil Cans",
+		ids = {
+			"oil_common",
+			"oil_uncommon",
+			"oil_rare",
+			"oil_legendary",
+			"oil_prismatic",
+		}
+	},
+	{
+		key = "cells",
+		label = "Power Cells",
+		ids = {
+			"cell_common",
+			"cell_uncommon",
+			"cell_rare",
+			"cell_legendary",
+			"cell_prismatic",
+		}
+	},
+	{
+		key = "batteries",
+		label = "Backup Batteries",
+		ids = {
+			"battery_uncommon",
+			"battery_rare",
+			"battery_legendary",
+		}
+	},
+	{
+		key = "shards",
+		label = "Mutation Shards",
+		ids = {
+			"shard_prismatic",
+		}
+	}
+}
+
+local ALL_GEAR = {}
+local GEAR_BY_CAT = {}
+
+local function gearDisplay(id)
+	local names = {
+		oil_common = "Oil Can Common",
+		oil_uncommon = "Oil Can Uncommon",
+		oil_rare = "Oil Can Rare",
+		oil_legendary = "Oil Can Legendary",
+		oil_prismatic = "Oil Can Prismatic",
+		cell_common = "Power Cell Common",
+		cell_uncommon = "Power Cell Uncommon",
+		cell_rare = "Power Cell Rare",
+		cell_legendary = "Power Cell Legendary",
+		cell_prismatic = "Power Cell Prismatic",
+		battery_uncommon = "Backup Battery Uncommon",
+		battery_rare = "Backup Battery Rare",
+		battery_legendary = "Backup Battery Legendary",
+		shard_prismatic = "Prismatic Mutation Shard",
+	}
+	return names[id] or id
+end
+
+for _, cat in ipairs(GEAR_CATEGORIES) do
+	GEAR_BY_CAT[cat.key] = {}
+	for _, id in ipairs(cat.ids) do
+		table.insert(ALL_GEAR, {
+			id = id,
+			cat = cat.key,
+			name = gearDisplay(id)
+		})
+		table.insert(GEAR_BY_CAT[cat.key], id)
+	end
+end
+
+local GEAR_TIER_COLORS = {
+	common = Color3.fromRGB(140, 140, 150),
+	uncommon = Color3.fromRGB(80, 220, 120),
+	rare = Color3.fromRGB(70, 130, 240),
+	legendary = Color3.fromRGB(240, 200, 80),
+	prismatic = Color3.fromRGB(180, 110, 220),
+}
+
+local function gearTier(id)
+	return id:match("_(common)$")
+		or id:match("_(uncommon)$")
+		or id:match("_(rare)$")
+		or id:match("_(legendary)$")
+		or id:match("_(prismatic)$")
+end
+
+local TIER_COLORS = {
+	dirt     = Color3.fromRGB(120,90,60),
+	stone    = Color3.fromRGB(140,140,150),
+	copper   = Color3.fromRGB(180,110,70),
+	iron     = Color3.fromRGB(200,200,210),
+	golden   = Color3.fromRGB(240,200,80),
+	crystal  = Color3.fromRGB(180,230,240),
+	emerald  = Color3.fromRGB(80,220,120),
+	ruby     = Color3.fromRGB(220,60,80),
+	sapphire = Color3.fromRGB(70,130,240),
+	amethyst = Color3.fromRGB(180,110,220),
+	quartz   = Color3.fromRGB(230,220,240),
+	gear     = Color3.fromRGB(150,150,160),
+	nature   = Color3.fromRGB(90,190,90),
+	tree     = Color3.fromRGB(120,160,90),
+	magma    = Color3.fromRGB(240,100,50),
+	tesla    = Color3.fromRGB(140,200,255),
+	diamond  = Color3.fromRGB(150,230,255),
+	guardian = Color3.fromRGB(120,180,200),
+	royal    = Color3.fromRGB(200,160,90),
+	demon    = Color3.fromRGB(200,40,40),
+	ancient  = Color3.fromRGB(210,180,120),
+	astral   = Color3.fromRGB(180,160,255),
+	void     = Color3.fromRGB(120,60,180),
+}
+
+local ALL = {}
+local BY_CAT = {}
+
+local KIND_REV = {
+	pickaxe = "Pickaxe",
+	head = "Head",
+	core = "Core",
+	arms = "Arms",
+	legs = "Legs"
+}
+
+local KIND_FWD = {
+	Pickaxe = "pickaxe",
+	Head = "head",
+	Core = "core",
+	Arms = "arms",
+	Legs = "legs"
+}
+
+for _, cat in ipairs(CATEGORIES) do
+	BY_CAT[cat.key] = {}
+
+	for _, mat in ipairs(MATERIALS) do
+		local id =
+			mat .. cat.suffix
+
+		table.insert(
+			ALL,
+			{
+				id = id,
+				cat = cat.key,
+				mat = mat
+			}
+		)
+
+		table.insert(
+			BY_CAT[cat.key],
+			id
+		)
+	end
+end
+
+local function idToDisplay(id)
+	local mat, kind =
+		id:match(
+			"^(.+)%-(.+)$"
+		)
+
+	if not mat or not kind then
+		return id
+	end
+
+	local k =
+		KIND_REV[kind]
+
+	if not k then
+		return id
+	end
+
+	return
+		mat:sub(1,1):upper()
+		.. mat:sub(2)
+		.. " "
+		.. k
+end
+
+local function displayToId(name)
+	local mat, kind =
+		name:match(
+			"^(%S+)%s+(%S+)$"
+		)
+
+	if not mat or not kind then
+		return nil
+	end
+
+	local k =
+		KIND_FWD[kind]
+
+	if not k then
+		return nil
+	end
+
+	return
+		mat:lower()
+		.. "-"
+		.. k
+end
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  REMOTES
+-- ═══════════════════════════════════════════════════════════════════════
+
+local rollEvent = nil
+local purchaseEvent = nil
+local sellEvent = nil
+local gearBuyEvent = nil
+local airshipBuyEvent = nil
+
+local function getRemotesContainer()
+
+	local a =
+		RS:FindFirstChild(
+			"rbxts_include"
+		)
+
+	if not a then
+		return nil
+	end
+
+	local b =
+		a:FindFirstChild(
+			"node_modules"
+		)
+
+	if not b then
+		return nil
+	end
+
+	local c =
+		b:FindFirstChild(
+			"@rbxts"
+		)
+
+	if not c then
+		return nil
+	end
+
+	local d =
+		c:FindFirstChild(
+			"remo"
+		)
+
+	if not d then
+		return nil
+	end
+
+	local e =
+		d:FindFirstChild(
+			"src"
+		)
+
+	if not e then
+		return nil
+	end
+
+	return e:FindFirstChild(
+		"container"
+	)
+end
+
+local function tryRemote(name)
+
+	local container =
+		getRemotesContainer()
+
+	if not container then
+		return nil
+	end
+
+	local direct =
+		container:FindFirstChild(name)
+
+	if direct
+		and (
+			direct:IsA("RemoteEvent")
+			or direct:IsA("RemoteFunction")
+		) then
+
+		return direct
+	end
+
+	for _, obj in ipairs(
+		container:GetDescendants()
+	) do
+
+		if obj.Name == name
+			and (
+				obj:IsA("RemoteEvent")
+				or obj:IsA("RemoteFunction")
+			) then
+
+			return obj
+		end
+	end
+
+	return nil
+end
+
+local function refreshRemotes()
+
+	rollEvent =
+		tryRemote(
+			"requests.roll"
+		)
+
+	purchaseEvent =
+		tryRemote(
+			"requests.purchase"
+		)
+
+	sellEvent =
+		tryRemote(
+			"requests.sell"
+		)
+
+	gearBuyEvent =
+		tryRemote(
+			"requests.buy_gear"
+		)
+
+	airshipBuyEvent =
+		tryRemote(
+			"requests.buy_airship"
+		)
+
+	if S and S.debug then
+
+		print(
+			"[nexus] remotes refreshed |"
+			.. " roll="
+			.. tostring(
+				rollEvent ~= nil
+			)
+			.. " buy="
+			.. tostring(
+				purchaseEvent ~= nil
+			)
+			.. " sell="
+			.. tostring(
+				sellEvent ~= nil
+			)
+			.. " gear="
+			.. tostring(
+				gearBuyEvent ~= nil
+			)
+			.. " airship="
+			.. tostring(
+				airshipBuyEvent ~= nil
+			)
+		)
+	end
+end
+
+local function remoteAlive(remote)
+
+	return
+		remote ~= nil
+		and remote.Parent ~= nil
+		and (
+			remote:IsA("RemoteEvent")
+			or remote:IsA("RemoteFunction")
+		)
+end
+
+local function fireRemote(remote, ...)
+	if not remoteAlive(remote) then
+		return false, "remote unavailable"
+	end
+
+	local args = table.pack(...)
+
+	local ok, result = pcall(function()
+		if remote:IsA("RemoteFunction") then
+			return remote:InvokeServer(table.unpack(args, 1, args.n))
+		end
+
+		remote:FireServer(table.unpack(args, 1, args.n))
+		return true
+	end)
+
+	if not ok then
+		return false, result
+	end
+
+	return true, result
+end
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  SOUND
+-- ═══════════════════════════════════════════════════════════════════════
+
+local function beep(id)
+
+	pcall(function()
+
+		if playSound then
+			playSound(
+				id or 12221967
+			)
+		end
+
+	end)
+end
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  CONFIG
+-- ═══════════════════════════════════════════════════════════════════════
+
+local CFG_FILE =
+	"nexus_config.json"
+
+local CFG_DIR =
+	"nexus_configs"
+
+local DEFAULT_CFG_FILE =
+	CFG_DIR .. "/default.json"
+
+local function ensureConfigFolder()
+	if not makefolder then
+		return false
+	end
+
+	local ok, exists = pcall(function()
+		return isfolder and isfolder(CFG_DIR) == true
+	end)
+
+	if ok and exists then
+		return true
+	end
+
+	local made = pcall(function()
+		makefolder(CFG_DIR)
+	end)
+
+	return made
+end
+
+local function sanitizeConfigName(name)
+	name = tostring(name or "")
+	name = name:gsub("^%s+", ""):gsub("%s+$", "")
+	name = name:gsub("[^%w_%-% ]", "_")
+	name = name:gsub("%s+", "_")
+	if name == "" then
+		return nil
+	end
+	return name
+end
+
+local function configFilePath(name)
+	local safe = sanitizeConfigName(name)
+	if not safe then
+		return nil
+	end
+	return CFG_DIR .. "/" .. safe .. ".json"
+end
+
+local function readJsonFile(path)
+	if not path or not isfile or not isfile(path) then
+		return nil
+	end
+
+	local ok, data = pcall(function()
+		return HttpService:JSONDecode(readfile(path))
+	end)
+
+	if ok and type(data) == "table" then
+		return data
+	end
+
+	return nil
+end
+
+local function loadCfg()
+
+	local def = {
+
+		sell = {},
+		buy = {},
+		gear = {},
+
+		autoRoll = false,
+		autoBuy = false,
+		autoSell = false,
+		autoGear = false,
+		autoAirship = false,
+
+		buySlots = {
+			[1] = true
+		},
+
+		gameId = 1045,
+
+		rollDelay = 0.40,
+		buyDelay = 0.08,
+		slotDelay = 0.00,
+		gearBuyDelay = 0.75,
+
+		sellDelay = 0.30,
+		sellEquipDelay = 0.15,
+
+		sniffer = false,
+		sounds = true,
+
+		roundRobin = false,
+		debug = false,
+
+		filterByMarkers = true,
+		markers = "legendary,prismatic",
+
+		myPlot = 0,
+
+        fly = false,
+        flySpeed = 50,
+        fov = 70,
+        menuBind = "RightShift",
+        rollBind = "R",
+        buyBind = "B",
+        sellBind = "V",
+        gearBind = "G",
+        miscBind = "M",
+        accentName = "red",
+        notifications = true,
+        buyUnknown = false,
+	}
+
+	local d =
+		readJsonFile(DEFAULT_CFG_FILE)
+
+	if not d then
+		d = readJsonFile(CFG_FILE)
+	end
+
+	if d then
+		for k,v in pairs(d) do
+			def[k] = v
+		end
+
+		if d.buySlot
+			and not d.buySlots then
+
+			def.buySlots = {
+				[tonumber(d.buySlot)] = true
+			}
+
+			def.buySlot = nil
+		end
+	end
+
+	def.afkSell = nil
+
+	if type(
+		def.buySlots
+	) == "table" then
+
+		local fixed = {}
+
+		for k,v in pairs(
+			def.buySlots
+		) do
+
+			local n =
+				tonumber(k)
+
+			if
+				n
+				and n >= 1
+				and n <= 5
+				and v
+			then
+
+				fixed[n] = true
+			end
+		end
+
+		def.buySlots = fixed
+	end
+
+	if
+		type(
+			def.buySlots
+		) ~= "table"
+		or
+		next(
+			def.buySlots
+		) == nil
+	then
+
+		def.buySlots = {
+			[1] = true
+		}
+	end
+
+	if def.gameId == 1046 then
+		def.gameId = 1045
+	end
+
+	return def
+end
+
+local function saveCfg(t, path)
+	if not writefile or not path then
+		return false
+	end
+
+	if not ensureConfigFolder() then
+		return false
+	end
+
+	local ok = pcall(function()
+		writefile(
+			path,
+			HttpService:JSONEncode(t)
+		)
+	end)
+
+	return ok
+end
+
+local raw =
+	loadCfg()
+
+local S = {
+
+	sell = raw.sell,
+	buy = raw.buy,
+	gear = raw.gear,
+
+	collapsed = {
+		sell = {},
+		buy = {},
+		gear = {}
+	},
+
+	tab = "sell",
+
+	autoRoll = false,
+	autoBuy = false,
+	autoSell = false,
+	autoGear = false,
+	autoAirship = false,
+
+	buySlots = raw.buySlots,
+
+	gameId = raw.gameId,
+
+	rollDelay = raw.rollDelay,
+	buyDelay = math.min(tonumber(raw.buyDelay) or 0.08, 0.08),
+	slotDelay = 0.00,
+	gearBuyDelay = math.max(0.20, tonumber(raw.gearBuyDelay) or 0.75),
+
+	sellDelay = raw.sellDelay,
+	sellEquipDelay =
+		raw.sellEquipDelay,
+
+	sniffer = raw.sniffer,
+	sounds = raw.sounds,
+
+	roundRobin = raw.roundRobin,
+	debug = raw.debug,
+
+	rrIndex = 0,
+
+	filterByMarkers =
+		raw.filterByMarkers,
+
+	markers = raw.markers,
+
+	myPlot = raw.myPlot,
+
+    fly = raw.fly == true,
+    flySpeed = tonumber(raw.flySpeed) or 50,
+    fov = tonumber(raw.fov) or 70,
+    menuBind = type(raw.menuBind) == "string" and raw.menuBind or "RightShift",
+    rollBind = type(raw.rollBind) == "string" and raw.rollBind or "R",
+    buyBind = type(raw.buyBind) == "string" and raw.buyBind or "B",
+    sellBind = type(raw.sellBind) == "string" and raw.sellBind or "V",
+    gearBind = type(raw.gearBind) == "string" and raw.gearBind or "G",
+    miscBind = type(raw.miscBind) == "string" and raw.miscBind or "M",
+    accentName = type(raw.accentName) == "string" and raw.accentName or "red",
+    notifications = raw.notifications ~= false,
+    buyUnknown = raw.buyUnknown == true,
+}
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  EXTENDED UI SETTINGS
+-- ═══════════════════════════════════════════════════════════════════════
+
+local ACCENTS = {
+    red = {
+        main = Color3.fromRGB(255, 78, 78),
+        dark = Color3.fromRGB(150, 45, 45)
+    },
+    purple = {
+        main = Color3.fromRGB(170, 105, 255),
+        dark = Color3.fromRGB(95, 55, 150)
+    },
+    blue = {
+        main = Color3.fromRGB(85, 150, 255),
+        dark = Color3.fromRGB(45, 90, 160)
+    },
+    green = {
+        main = Color3.fromRGB(80, 220, 120),
+        dark = Color3.fromRGB(45, 135, 75)
+    },
+    orange = {
+        main = Color3.fromRGB(255, 150, 65),
+        dark = Color3.fromRGB(155, 85, 35)
+    }
+}
+
+local function applyAccentName(name)
+    local theme = ACCENTS[name] or ACCENTS.red
+    C.accent = theme.main
+    C.accentD = theme.dark
+    S.accentName = name
+end
+
+applyAccentName(S.accentName)
+
+local function keyCodeFromName(name)
+    if type(name) ~= "string" then
+        return Enum.KeyCode.RightShift
+    end
+
+    local ok, result = pcall(function()
+        return Enum.KeyCode[name]
+    end)
+
+    if ok and result then
+        return result
+    end
+
+    return Enum.KeyCode.RightShift
+end
+
+local function menuBindName()
+    local key = keyCodeFromName(S.menuBind)
+    return key.Name
+end
+
+local function actionBindName(action)
+    local name = ({
+        roll = S.rollBind,
+        buy = S.buyBind,
+        sell = S.sellBind,
+        gear = S.gearBind,
+        misc = S.miscBind,
+    })[action]
+
+    return keyCodeFromName(name).Name
+end
+
+local function setActionBind(action, key)
+    if not key or key == Enum.KeyCode.Unknown then
+        return
+    end
+
+    local name = key.Name
+
+    if action == "roll" then
+        S.rollBind = name
+    elseif action == "buy" then
+        S.buyBind = name
+    elseif action == "sell" then
+        S.sellBind = name
+    elseif action == "gear" then
+        S.gearBind = name
+    elseif action == "misc" then
+        S.miscBind = name
+    elseif action == "menu" then
+        S.menuBind = name
+    end
+end
+
+local function serializeSettings()
+	local cleanSlots = {}
+
+	for i = 1,5 do
+		if S.buySlots[i] then
+			cleanSlots[i] = true
+		end
+	end
+
+	return {
+		sell = S.sell,
+		buy = S.buy,
+		gear = S.gear,
+
+		autoRoll = false,
+		autoBuy = false,
+		autoSell = false,
+		autoGear = false,
+		autoAirship = false,
+
+		buySlots = cleanSlots,
+
+		gameId = S.gameId,
+
+		rollDelay = S.rollDelay,
+		buyDelay = S.buyDelay,
+		slotDelay = S.slotDelay,
+		gearBuyDelay = S.gearBuyDelay,
+
+		sellDelay = S.sellDelay,
+		sellEquipDelay = S.sellEquipDelay,
+
+		sniffer = S.sniffer,
+		sounds = S.sounds,
+
+		roundRobin = S.roundRobin,
+		debug = S.debug,
+
+		filterByMarkers = S.filterByMarkers,
+		markers = S.markers,
+		myPlot = S.myPlot,
+
+		fly = S.fly,
+		flySpeed = S.flySpeed,
+		fov = S.fov,
+
+		menuBind = S.menuBind,
+		rollBind = S.rollBind,
+		buyBind = S.buyBind,
+		sellBind = S.sellBind,
+		gearBind = S.gearBind,
+		miscBind = S.miscBind,
+
+		accentName = S.accentName,
+		notifications = S.notifications,
+		buyUnknown = S.buyUnknown
+	}
+end
+
+local function persist()
+	local data = serializeSettings()
+
+	-- Keep the old single-file config compatible.
+	saveCfg(data, CFG_FILE)
+
+	-- "default" always means the latest settings.
+	saveCfg(data, DEFAULT_CFG_FILE)
+end
+
+local selectedConfigName = "default"
+local configNameDraft = "default"
+
+local function getSelectedSlots()
+
+	local t = {}
+
+	for i = 1,5 do
+
+		if S.buySlots[i] == true then
+			table.insert(
+				t,
+				i
+			)
+		end
+	end
+
+	table.sort(t)
+
+	return t
+end
+
+local function slotsString()
+
+	local t =
+		getSelectedSlots()
+
+	if #t == 0 then
+		return "none"
+	end
+
+	return table.concat(
+		t,
+		","
+	)
+end
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  ROLL MACHINE
+-- ═══════════════════════════════════════════════════════════════════════
+
+local function findMyRollMachine()
+
+	local plots =
+		workspace:FindFirstChild(
+			"plots"
+		)
+
+	if not plots then
+		return nil,
+			"no plots folder"
+	end
+
+	if
+		S.myPlot
+		and S.myPlot >= 1
+		and S.myPlot <= 6
+	then
+
+		local p =
+			plots:FindFirstChild(
+				"Plot_" .. S.myPlot
+			)
+
+		if p then
+
+			local rm =
+				p:FindFirstChild(
+					"roll-machine",
+					true
+				)
+
+			if rm then
+				return rm,
+					"manual"
+			end
+		end
+
+		return nil,
+			"manual plot not found"
+	end
+
+	local char =
+		LP.Character
+
+	if not char then
+		return nil,
+			"no char"
+	end
+
+	local root =
+		char:FindFirstChild(
+			"HumanoidRootPart"
+		)
+
+	if not root then
+		return nil,
+			"no root"
+	end
+
+	local origin =
+		root.Position
+
+	local best = nil
+	local bestDist =
+		math.huge
+
+	for _,p in ipairs(
+		plots:GetChildren()
+	) do
+
+		local rm =
+			p:FindFirstChild(
+				"roll-machine",
+				true
+			)
+
+		if rm then
+
+			local slot1 =
+				rm:FindFirstChild(
+					"slot1",
+					true
+				)
+
+			local anchor =
+				slot1
+				and slot1:FindFirstChild(
+					"anchor",
+					true
+				)
+
+			if anchor
+				and anchor:IsA(
+					"BasePart"
+				) then
+
+				local d =
+					(
+						anchor.Position
+						- origin
+					).Magnitude
+
+				if d < bestDist then
+					bestDist = d
+					best = rm
+				end
+			end
+		end
+	end
+
+	if best
+		and bestDist < 300 then
+
+		return best,
+			("auto (%.0f studs)")
+			:format(
+				bestDist
+			)
+	end
+
+	return nil,
+		(
+			"no plot within 300 (closest %.0f)"
+		):format(
+			bestDist
+		)
+end
+
+local function getSlotItem(
+	slotInst
+)
+
+	if not slotInst then
+		return nil
+	end
+
+	local ok,result =
+		pcall(function()
+
+			local item =
+				slotInst:FindFirstChild(
+					"item"
+				)
+
+			if
+				item
+				and item:IsA(
+					"ObjectValue"
+				)
+				and item.Value
+			then
+
+				return item.Value.Name
+			end
+
+			return nil
+		end)
+
+	if ok then
+		return result
+	end
+
+	return nil
+end
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  PROMPT
+-- ═══════════════════════════════════════════════════════════════════════
+
+local function findRollPrompt(
+    rollMachine
+)
+
+    if not rollMachine then
+        return nil
+    end
+
+    local lever = rollMachine:FindFirstChild("lever", true)
+
+    if lever then
+        for _, obj in ipairs(lever:GetDescendants()) do
+            if obj:IsA("ProximityPrompt")
+                and obj.Enabled ~= false
+            then
+                if obj.ActionText == "Roll" then
+                    return obj
+                end
+            end
+        end
+    end
+
+    for _,obj in ipairs(
+        rollMachine:GetDescendants()
+    ) do
+        if obj:IsA("ProximityPrompt")
+            and obj.Enabled ~= false
+            and obj.ActionText == "Roll"
+        then
+            return obj
+        end
+    end
+
+    return nil
+end
+
+local function triggerPrompt(
+	prompt
+)
+
+	if not prompt then
+		return false
+	end
+
+	if not prompt.Parent then
+		return false
+	end
+
+	if
+		prompt:IsA(
+			"ProximityPrompt"
+		)
+		and not prompt.Enabled
+	then
+
+		return false
+	end
+
+	if fireproximityprompt then
+
+		local ok =
+			pcall(function()
+
+				fireproximityprompt(
+					prompt
+				)
+
+			end)
+
+		if ok then
+			return true
+		end
+	end
+
+	local ok =
+		pcall(function()
+
+			prompt:InputHoldBegin()
+
+			local hold =
+				tonumber(
+					prompt.HoldDuration
+				)
+				or 0
+
+			if hold > 0 then
+
+				task.wait(
+					hold + 0.08
+				)
+
+			else
+
+				task.wait(
+					0.08
+				)
+			end
+
+			prompt:InputHoldEnd()
+
+		end)
+
+	return ok
+end
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  PUBLIC API
+-- ═══════════════════════════════════════════════════════════════════════
+
+_G.Nexus =
+	_G.Nexus or {}
+
+function _G.Nexus.shouldSell(id)
+	return S.sell[id] == true
+end
+
+function _G.Nexus.getSellSet()
+	return S.sell
+end
+
+function _G.Nexus.getBuySet()
+	return S.buy
+end
+
+function _G.Nexus.getConfig()
+	return S
+end
+
+function _G.Nexus.getSlots()
+	return getSelectedSlots()
+end
+
+function _G.Nexus.getRuntimeId()
+	return runtimeId
+end
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  ANTI AFK
+-- ═══════════════════════════════════════════════════════════════════════
+
+local antiAfkConn = nil
+
+local function startAntiAFK()
+
+	if antiAfkConn then
+		return
+	end
+
+	antiAfkConn =
+		trackConnection(
+			LP.Idled:Connect(
+				function()
+
+					if not runtimeAlive then
+						return
+					end
+
+					pcall(function()
+
+						VirtualUser:
+							CaptureController()
+
+						VirtualUser:
+							ClickButton2(
+								Vector2.new(
+									0,
+									0
+								)
+							)
+
+					end)
+
+				end
+			)
+		)
+
+	print(
+		"[nexus] Anti-AFK enabled"
+	)
+end
+
+startAntiAFK()
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  SNIFFER
+--  Stable build: no __namecall hook is installed.
+-- ═══════════════════════════════════════════════════════════════════════
+
+local sniffConn = nil
+local snifferLog = {}
+
+local function startSniffer()
+    S.sniffer = false
+    toast("Sniffer disabled in stable build", C.warn)
+end
+
+local function stopSniffer()
+    sniffConn = nil
+    table.clear(snifferLog)
+end
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  UI HELPERS
+-- ═══════════════════════════════════════════════════════════════════════
+
+local function corner(
+	p,
+	r
+)
+
+	local c =
+		Instance.new(
+			"UICorner"
+		)
+
+	c.CornerRadius =
+		UDim.new(
+			0,
+			r or 4
+		)
+
+	c.Parent = p
+
+	return c
+end
+
+local function stroke(
+	p,
+	col,
+	th
+)
+
+	local s =
+		Instance.new(
+			"UIStroke"
+		)
+
+	s.Color =
+		col or C.accentD
+
+	s.Thickness =
+		th or 1
+
+	s.Parent = p
+
+	return s
+end
+
+local function pad(
+	p,
+	t,
+	b,
+	l,
+	r
+)
+
+	local x =
+		Instance.new(
+			"UIPadding"
+		)
+
+	x.PaddingTop =
+		UDim.new(
+			0,
+			t or 0
+		)
+
+	x.PaddingBottom =
+		UDim.new(
+			0,
+			b or 0
+		)
+
+	x.PaddingLeft =
+		UDim.new(
+			0,
+			l or 0
+		)
+
+	x.PaddingRight =
+		UDim.new(
+			0,
+			r or 0
+		)
+
+	x.Parent = p
+
+	return x
+end
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  GUI
+-- ═══════════════════════════════════════════════════════════════════════
+
+local screen =
+	Instance.new(
+		"ScreenGui"
+	)
+
+screen.Name =
+	"NexusAutoSellBuy"
+
+screen.ResetOnSpawn = false
+
+screen.ZIndexBehavior =
+	Enum.ZIndexBehavior.Sibling
+
+screen.Enabled = true
+
+pcall(function()
+
+	screen.Parent =
+		game:GetService(
+			"CoreGui"
+		)
+
+end)
+
+if not screen.Parent then
+
+	screen.Parent =
+		LP:WaitForChild(
+			"PlayerGui"
+		)
+end
+
+local function refreshThemeVisuals()
+
+    local oldAccent =
+        Color3.fromRGB(255, 78, 78)
+
+    local oldDark =
+        Color3.fromRGB(150, 45, 45)
+
+    for _, obj in ipairs(screen:GetDescendants()) do
+
+        if obj:IsA("UIStroke") then
+            if obj.Color == oldDark
+                or obj.Color == oldAccent
+            then
+                obj.Color = C.accentD
+            end
+        elseif obj:IsA("ScrollingFrame") then
+            if obj.ScrollBarImageColor3 == oldDark then
+                obj.ScrollBarImageColor3 =
+                    C.accentD
+            end
+        elseif obj:IsA("TextLabel")
+            or obj:IsA("TextButton")
+        then
+            if obj.TextColor3 == oldAccent then
+                obj.TextColor3 = C.accent
+            end
+        elseif obj:IsA("Frame") then
+            if obj.BackgroundColor3 == oldAccent then
+                obj.BackgroundColor3 = C.accent
+            elseif obj.BackgroundColor3 == oldDark then
+                obj.BackgroundColor3 = C.accentD
+            end
+        end
+    end
+
+    if tabButtons then
+        for key, data in pairs(tabButtons) do
+            if data and data.under then
+                data.under.BackgroundColor3 =
+                    C.accent
+            end
+
+            if data and data.btn then
+                data.btn.TextColor3 =
+                    key == S.tab
+                    and C.accent
+                    or C.textDim
+            end
+        end
+    end
+end
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  TOAST
+-- ═══════════════════════════════════════════════════════════════════════
+
+local toastHolder =
+	Instance.new("Frame")
+
+toastHolder.Size =
+	UDim2.new(
+		0,
+		300,
+		1,
+		-40
+	)
+
+toastHolder.Position =
+	UDim2.new(
+		1,
+		-320,
+		0,
+		20
+	)
+
+toastHolder.BackgroundTransparency = 1
+toastHolder.Parent = screen
+
+local tl =
+	Instance.new(
+		"UIListLayout"
+	)
+
+tl.SortOrder =
+	Enum.SortOrder.LayoutOrder
+
+tl.Padding =
+	UDim.new(
+		0,
+		6
+	)
+
+tl.Parent =
+	toastHolder
+
+local function toast(
+	text,
+	color
+)
+
+    if S and S.notifications == false then
+        return
+    end
+
+	local f =
+		Instance.new(
+			"Frame"
+		)
+
+	f.Size =
+		UDim2.new(
+			1,
+			0,
+			0,
+			32
+		)
+
+	f.BackgroundColor3 =
+		C.panel
+
+	f.BackgroundTransparency = 1
+	f.BorderSizePixel = 0
+
+	f.Parent =
+		toastHolder
+
+	corner(
+		f,
+		4
+	)
+
+	stroke(
+		f,
+		color or C.accent,
+		1
+	)
+
+	local bar =
+		Instance.new(
+			"Frame"
+		)
+
+	bar.Size =
+		UDim2.new(
+			0,
+			3,
+			1,
+			0
+		)
+
+	bar.BackgroundColor3 =
+		color or C.accent
+
+	bar.BackgroundTransparency = 1
+	bar.BorderSizePixel = 0
+
+	bar.Parent = f
+
+	corner(
+		bar,
+		4
+	)
+
+	local l =
+		Instance.new(
+			"TextLabel"
+		)
+
+	l.Size =
+		UDim2.new(
+			1,
+			-20,
+			1,
+			0
+		)
+
+	l.Position =
+		UDim2.new(
+			0,
+			12,
+			0,
+			0
+		)
+
+	l.BackgroundTransparency = 1
+
+	l.Text =
+		text
+
+	l.TextColor3 =
+		C.text
+
+	l.TextSize = 12
+	l.Font = FONT_M
+
+	l.TextTransparency = 1
+
+	l.TextXAlignment =
+		Enum.TextXAlignment.Left
+
+	l.Parent = f
+
+	TweenService:Create(
+		f,
+		TweenInfo.new(0.2),
+		{
+			BackgroundTransparency = 0.1
+		}
+	):Play()
+
+	TweenService:Create(
+		bar,
+		TweenInfo.new(0.2),
+		{
+			BackgroundTransparency = 0
+		}
+	):Play()
+
+	TweenService:Create(
+		l,
+		TweenInfo.new(0.2),
+		{
+			TextTransparency = 0
+		}
+	):Play()
+
+	task.delay(
+		2.2,
+		function()
+
+			if not f.Parent then
+				return
+			end
+
+			TweenService:Create(
+				f,
+				TweenInfo.new(0.3),
+				{
+					BackgroundTransparency = 1
+				}
+			):Play()
+
+			TweenService:Create(
+				bar,
+				TweenInfo.new(0.3),
+				{
+					BackgroundTransparency = 1
+				}
+			):Play()
+
+			TweenService:Create(
+				l,
+				TweenInfo.new(0.3),
+				{
+					TextTransparency = 1
+				}
+			):Play()
+
+			task.wait(
+				0.35
+			)
+
+			if f.Parent then
+				f:Destroy()
+			end
+		end
+	)
+end
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  MAIN
+-- ═══════════════════════════════════════════════════════════════════════
+
+local main =
+	Instance.new("Frame")
+
+main.Size =
+	UDim2.new(
+		0,
+		900,
+		0,
+		680
+	)
+
+main.Position =
+	UDim2.new(
+		0.5,
+		-450,
+		0.5,
+		-340
+	)
+
+main.BackgroundColor3 =
+	C.bg
+
+main.BorderSizePixel = 0
+main.Visible = true
+
+main.Parent =
+	screen
+
+corner(
+	main,
+	8
+)
+
+stroke(
+	main,
+	C.accentD,
+	1
+)
+
+local topbar =
+	Instance.new("Frame")
+
+topbar.Size =
+	UDim2.new(
+		1,
+		0,
+		0,
+		40
+	)
+
+topbar.BackgroundColor3 =
+	C.header
+
+topbar.BorderSizePixel = 0
+topbar.Parent = main
+
+corner(
+	topbar,
+	8
+)
+
+local logo =
+	Instance.new("TextLabel")
+
+logo.Size =
+	UDim2.new(
+		0,
+		120,
+		1,
+		0
+	)
+
+logo.Position =
+	UDim2.new(
+		0,
+		14,
+		0,
+		0
+	)
+
+logo.BackgroundTransparency = 1
+
+logo.Text =
+	"NEXUS"
+
+logo.TextColor3 =
+	C.accent
+
+logo.TextSize = 17
+logo.Font = FONT_B
+
+logo.TextXAlignment =
+	Enum.TextXAlignment.Left
+
+logo.Parent =
+	topbar
+
+local verLbl =
+	Instance.new("TextLabel")
+
+verLbl.Size =
+	UDim2.new(
+		0,
+		70,
+		1,
+		0
+	)
+
+verLbl.Position =
+	UDim2.new(
+		0,
+		72,
+		0,
+		0
+	)
+
+verLbl.BackgroundTransparency = 1
+
+verLbl.Text =
+	"v7.0.0"
+
+verLbl.TextColor3 =
+	C.textMut
+
+verLbl.TextSize = 11
+verLbl.Font = FONT_M
+
+verLbl.TextXAlignment =
+	Enum.TextXAlignment.Left
+
+verLbl.Parent =
+	topbar
+
+local divV =
+	Instance.new("Frame")
+
+divV.Size =
+	UDim2.new(
+		0,
+		1,
+		0,
+		16
+	)
+
+divV.Position =
+	UDim2.new(
+		0,
+		118,
+		0.5,
+		-8
+	)
+
+divV.BackgroundColor3 =
+	C.accentD
+
+divV.BorderSizePixel = 0
+divV.Parent =
+	topbar
+
+local function mkIconBtn(
+	xOff,
+	text,
+	cb
+)
+
+	local b =
+		Instance.new(
+			"TextButton"
+		)
+
+	b.Size =
+		UDim2.new(
+			0,
+			28,
+			0,
+			28
+		)
+
+	b.Position =
+		UDim2.new(
+			1,
+			xOff,
+			0.5,
+			-14
+		)
+
+	b.BackgroundColor3 =
+		C.row
+
+	b.Text =
+		text
+
+	b.TextColor3 =
+		C.text
+
+	b.TextSize = 14
+	b.Font = FONT_B
+
+	b.BorderSizePixel = 0
+	b.AutoButtonColor = false
+
+	b.Parent =
+		topbar
+
+	corner(
+		b,
+		4
+	)
+
+	trackConnection(
+		b.MouseButton1Click:
+			Connect(cb)
+	)
+
+	trackConnection(
+		b.MouseEnter:
+			Connect(function()
+				b.BackgroundColor3 =
+					C.rowHov
+			end)
+	)
+
+	trackConnection(
+		b.MouseLeave:
+			Connect(function()
+				b.BackgroundColor3 =
+					C.row
+			end)
+	)
+
+	return b
+end
+
+mkIconBtn(
+	-36,
+	"×",
+	function()
+
+		runtimeAlive = false
+
+		running.roll = false
+		running.buy = false
+		running.sell = false
+
+        pcall(function()
+            stopFly()
+        end)
+
+		sellRunId += 1
+
+		pcall(function()
+			stopSniffer()
+		end)
+
+		pcall(function()
+			destroyMinCircle()
+		end)
+
+		pcall(function()
+			screen:Destroy()
+		end)
+
+		disconnectAllConnections()
+	end
+)
+
+mkIconBtn(
+	-70,
+	"—",
+	function()
+		toggleUI()
+	end
+)
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  TABS
+-- ═══════════════════════════════════════════════════════════════════════
+
+local tabsRow =
+	Instance.new(
+		"Frame"
+	)
+
+tabsRow.Size =
+	UDim2.new(
+		1,
+		0,
+		0,
+		38
+	)
+
+tabsRow.Position =
+	UDim2.new(
+		0,
+		0,
+		0,
+		40
+	)
+
+tabsRow.BackgroundColor3 =
+	C.header
+
+tabsRow.BorderSizePixel = 0
+tabsRow.Parent =
+	main
+
+local tabsLayout =
+	Instance.new(
+		"UIListLayout"
+	)
+
+tabsLayout.FillDirection =
+	Enum.FillDirection.Horizontal
+
+tabsLayout.Parent =
+	tabsRow
+
+local tabButtons = {}
+
+local function mkTab(
+	key,
+	label
+)
+
+	local btn =
+		Instance.new(
+			"TextButton"
+		)
+
+	btn.Size =
+		UDim2.new(
+			0,
+			140,
+			1,
+			0
+		)
+
+	btn.BackgroundTransparency = 1
+
+	btn.Text =
+		label
+
+	btn.TextColor3 =
+		C.textDim
+
+	btn.TextSize = 13
+	btn.Font = FONT_B
+
+	btn.BorderSizePixel = 0
+	btn.AutoButtonColor = false
+
+	btn.Parent =
+		tabsRow
+
+	local under =
+		Instance.new(
+			"Frame"
+		)
+
+	under.Size =
+		UDim2.new(
+			1,
+			-20,
+			0,
+			2
+		)
+
+	under.Position =
+		UDim2.new(
+			0,
+			10,
+			1,
+			-2
+		)
+
+	under.BackgroundColor3 =
+		C.accent
+
+	under.BorderSizePixel = 0
+	under.Visible = false
+
+	under.Parent =
+		btn
+
+	tabButtons[key] = {
+		btn = btn,
+		under = under
+	}
+
+	trackConnection(
+		btn.MouseButton1Click:
+			Connect(function()
+
+				if not runtimeAlive then
+					return
+				end
+
+				S.tab = key
+
+				for k,t in pairs(
+					tabButtons
+				) do
+
+					local active =
+						k == key
+
+					t.under.Visible =
+						active
+
+					t.btn.TextColor3 =
+						active
+						and C.accent
+						or C.textDim
+				end
+
+				if rebuild then
+					rebuild()
+				end
+
+			end)
+	)
+end
+
+mkTab(
+	"sell",
+	"AUTO SELL"
+)
+
+mkTab(
+	"buy",
+	"AUTO BUY"
+)
+
+mkTab(
+	"gear",
+	"AUTO BUY GEAR"
+)
+
+mkTab(
+	"airship",
+	"AUTO BUY AIRSHIP"
+)
+
+mkTab(
+    "misc",
+    "MISC"
+)
+
+mkTab(
+    "settings",
+    "SETTINGS"
+)
+
+tabButtons.sell.under.Visible =
+	true
+
+tabButtons.sell.btn.TextColor3 =
+	C.accent
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  BODY
+-- ═══════════════════════════════════════════════════════════════════════
+
+local body =
+	Instance.new(
+		"Frame"
+	)
+
+body.Size =
+	UDim2.new(
+		1,
+		-12,
+		1,
+		-40-38-34-12
+	)
+
+body.Position =
+	UDim2.new(
+		0,
+		6,
+		0,
+		78
+	)
+
+body.BackgroundTransparency = 1
+body.Parent = main
+
+local leftCol =
+	Instance.new(
+		"Frame"
+	)
+
+leftCol.Size =
+	UDim2.new(
+		1,
+		-292,
+		1,
+		0
+	)
+
+leftCol.BackgroundTransparency = 1
+leftCol.Parent =
+	body
+
+local rightCol =
+	Instance.new(
+		"ScrollingFrame"
+	)
+
+rightCol.Size =
+	UDim2.new(
+		0,
+		286,
+		1,
+		0
+	)
+
+rightCol.Position =
+	UDim2.new(
+		1,
+		-286,
+		0,
+		0
+	)
+
+rightCol.BackgroundColor3 =
+	C.panel
+
+rightCol.BorderSizePixel = 0
+
+rightCol.CanvasSize =
+	UDim2.new(
+		0,
+		0,
+		0,
+		0
+	)
+
+rightCol.AutomaticCanvasSize =
+	Enum.AutomaticSize.Y
+
+rightCol.ScrollingDirection =
+	Enum.ScrollingDirection.Y
+
+rightCol.ScrollBarThickness = 4
+
+rightCol.ScrollBarImageColor3 =
+	C.accentD
+
+rightCol.ScrollBarImageTransparency =
+	0.15
+
+rightCol.ClipsDescendants = true
+rightCol.Parent =
+	body
+
+corner(
+	rightCol,
+	4
+)
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  TOOLBAR
+-- ═══════════════════════════════════════════════════════════════════════
+
+local toolbar =
+	Instance.new(
+		"Frame"
+	)
+
+toolbar.Size =
+	UDim2.new(
+		1,
+		0,
+		0,
+		32
+	)
+
+toolbar.BackgroundColor3 =
+	C.panel
+
+toolbar.BorderSizePixel = 0
+toolbar.Parent =
+	leftCol
+
+corner(
+	toolbar,
+	4
+)
+
+local searchBox =
+	Instance.new(
+		"TextBox"
+	)
+
+searchBox.Size =
+	UDim2.new(
+		0,
+		160,
+		0,
+		22
+	)
+
+searchBox.Position =
+	UDim2.new(
+		0,
+		8,
+		0.5,
+		-11
+	)
+
+searchBox.BackgroundColor3 =
+	C.row
+
+searchBox.Text = ""
+
+searchBox.PlaceholderText =
+	"search..."
+
+searchBox.PlaceholderColor3 =
+	C.textMut
+
+searchBox.TextColor3 =
+	C.text
+
+searchBox.TextSize = 11
+searchBox.Font = FONT_M
+
+searchBox.BorderSizePixel = 0
+searchBox.ClearTextOnFocus = false
+
+searchBox.Parent =
+	toolbar
+
+corner(
+	searchBox,
+	3
+)
+
+local counterLbl =
+	Instance.new(
+		"TextLabel"
+	)
+
+counterLbl.Size =
+	UDim2.new(
+		0,
+		130,
+		1,
+		0
+	)
+
+counterLbl.Position =
+	UDim2.new(
+		0,
+		178,
+		0,
+		0
+	)
+
+counterLbl.BackgroundTransparency = 1
+
+counterLbl.Text =
+	"0 / 115"
+
+counterLbl.TextColor3 =
+	C.textDim
+
+counterLbl.TextSize = 11
+counterLbl.Font = FONT_M
+
+counterLbl.TextXAlignment =
+	Enum.TextXAlignment.Left
+
+counterLbl.Parent =
+	toolbar
+
+local function mkToolBtn(
+	xOff,
+	text,
+	cb,
+	w
+)
+
+	w =
+		w or 90
+
+	local b =
+		Instance.new(
+			"TextButton"
+		)
+
+	b.Size =
+		UDim2.new(
+			0,
+			w,
+			0,
+			22
+		)
+
+	b.Position =
+		UDim2.new(
+			1,
+			xOff,
+			0.5,
+			-11
+		)
+
+	b.BackgroundColor3 =
+		C.row
+
+	b.Text =
+		text
+
+	b.TextColor3 =
+		C.text
+
+	b.TextSize = 10
+	b.Font = FONT_B
+
+	b.BorderSizePixel = 0
+	b.AutoButtonColor = false
+
+	b.Parent =
+		toolbar
+
+	corner(
+		b,
+		3
+	)
+
+	trackConnection(
+		b.MouseButton1Click:
+			Connect(cb)
+	)
+
+	trackConnection(
+		b.MouseEnter:
+			Connect(function()
+				b.BackgroundColor3 =
+					C.rowHov
+			end)
+	)
+
+	trackConnection(
+		b.MouseLeave:
+			Connect(function()
+				b.BackgroundColor3 =
+					C.row
+			end)
+	)
+
+	return b
+end
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  ITEM SCROLL
+-- ═══════════════════════════════════════════════════════════════════════
+
+local scroll =
+	Instance.new(
+		"ScrollingFrame"
+	)
+
+scroll.Size =
+	UDim2.new(
+		1,
+		0,
+		1,
+		-40
+	)
+
+scroll.Position =
+	UDim2.new(
+		0,
+		0,
+		0,
+		40
+	)
+
+scroll.BackgroundColor3 =
+	C.panel
+
+scroll.BorderSizePixel = 0
+
+scroll.ScrollBarThickness = 4
+
+scroll.ScrollBarImageColor3 =
+	C.accentD
+
+scroll.CanvasSize =
+	UDim2.new(
+		0,
+		0,
+		0,
+		0
+	)
+
+scroll.AutomaticCanvasSize =
+	Enum.AutomaticSize.Y
+
+scroll.Parent =
+	leftCol
+
+corner(
+	scroll,
+	4
+)
+
+local sL =
+	Instance.new(
+		"UIListLayout"
+	)
+
+sL.SortOrder =
+	Enum.SortOrder.LayoutOrder
+
+sL.Padding =
+	UDim.new(
+		0,
+		6
+	)
+
+sL.Parent =
+	scroll
+
+pad(
+	scroll,
+	6,
+	6,
+	6,
+	6
+)
+
+mkToolBtn(
+	-100,
+	"UNSELECT ALL",
+	function()
+
+		if S.tab ~= "sell"
+			and S.tab ~= "buy"
+			and S.tab ~= "gear"
+		then
+			toast(
+				"Selection tools are for Sell / Buy / Gear.",
+				C.warn
+			)
+			return
+		end
+
+		local st, items =
+			activeSelectionTable()
+
+		for _,item in ipairs(items) do
+			st[item.id] = nil
+		end
+
+		persist()
+
+		if rebuild then
+			rebuild()
+		end
+
+		toast(
+			"Unselected all (" ..
+			S.tab ..
+			")",
+			C.textDim
+		)
+	end,
+	92
+)
+
+mkToolBtn(
+	-8,
+	"SELECT ALL",
+	function()
+
+		if S.tab ~= "sell"
+			and S.tab ~= "buy"
+			and S.tab ~= "gear"
+		then
+			toast(
+				"Selection tools are for Sell / Buy / Gear.",
+				C.warn
+			)
+			return
+		end
+
+		local st, items =
+			activeSelectionTable()
+
+		for _,item in ipairs(items) do
+			st[item.id] = true
+		end
+
+		persist()
+
+		if rebuild then
+			rebuild()
+		end
+
+		toast(
+			"Selected all (" ..
+			S.tab ..
+			")",
+			C.ok
+		)
+	end,
+	84
+)
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  RIGHT PANEL HELPERS
+-- ═══════════════════════════════════════════════════════════════════════
+
+local rightL =
+	Instance.new(
+		"UIListLayout"
+	)
+
+rightL.SortOrder =
+	Enum.SortOrder.LayoutOrder
+
+rightL.Padding =
+	UDim.new(
+		0,
+		6
+	)
+
+rightL.Parent =
+	rightCol
+
+pad(
+	rightCol,
+	8,
+	8,
+	8,
+	8
+)
+
+local toggleVisuals = {}
+
+updateToggleVisual =
+	function(
+		name,
+		state
+	)
+
+	local data =
+		toggleVisuals[name]
+
+	if not data then
+		return
+	end
+
+	if not data.track
+		or not data.knob then
+
+		return
+	end
+
+	data.track.BackgroundColor3 =
+		state
+		and C.accent
+		or C.box
+
+	data.knob.Position =
+		state
+		and UDim2.new(
+			1,
+			-12,
+			0.5,
+			-5
+		)
+		or UDim2.new(
+			0,
+			2,
+			0.5,
+			-5
+		)
+end
+
+local function sectionLabel(text)
+
+	local l =
+		Instance.new(
+			"TextLabel"
+		)
+
+	l.Size =
+		UDim2.new(
+			1,
+			0,
+			0,
+			18
+		)
+
+	l.BackgroundTransparency = 1
+
+	l.Text =
+		text
+
+	l.TextColor3 =
+		C.accent
+
+	l.TextSize = 11
+	l.Font = FONT_B
+
+	l.TextXAlignment =
+		Enum.TextXAlignment.Left
+
+	l.Parent =
+		rightCol
+
+	return l
+end
+
+local function smallLabel(text)
+
+	local l =
+		Instance.new(
+			"TextLabel"
+		)
+
+	l.Size =
+		UDim2.new(
+			1,
+			0,
+			0,
+			14
+		)
+
+	l.BackgroundTransparency = 1
+
+	l.Text =
+		text
+
+	l.TextColor3 =
+		C.textDim
+
+	l.TextSize = 10
+	l.Font = FONT_M
+
+	l.TextXAlignment =
+		Enum.TextXAlignment.Left
+
+	l.Parent =
+		rightCol
+
+	return l
+end
+
+local function mkToggle(
+	name,
+	text,
+	getState,
+	onChanged
+)
+
+	local f =
+		Instance.new(
+			"Frame"
+		)
+
+	f.Size =
+		UDim2.new(
+			1,
+			0,
+			0,
+			26
+		)
+
+	f.BackgroundColor3 =
+		C.row
+
+	f.BackgroundTransparency =
+		0.4
+
+	f.BorderSizePixel = 0
+	f.Parent =
+		rightCol
+
+	corner(
+		f,
+		3
+	)
+
+	local lbl =
+		Instance.new(
+			"TextLabel"
+		)
+
+	lbl.Size =
+		UDim2.new(
+			1,
+			-50,
+			1,
+			0
+		)
+
+	lbl.Position =
+		UDim2.new(
+			0,
+			8,
+			0,
+			0
+		)
+
+	lbl.BackgroundTransparency = 1
+
+	lbl.Text =
+		text
+
+	lbl.TextColor3 =
+		C.text
+
+	lbl.TextSize = 11
+	lbl.Font = FONT_M
+
+	lbl.TextXAlignment =
+		Enum.TextXAlignment.Left
+
+	lbl.Parent = f
+
+	local track =
+		Instance.new(
+			"Frame"
+		)
+
+	track.Size =
+		UDim2.new(
+			0,
+			30,
+			0,
+			14
+		)
+
+	track.Position =
+		UDim2.new(
+			1,
+			-38,
+			0.5,
+			-7
+		)
+
+	track.BackgroundColor3 =
+		getState()
+		and C.accent
+		or C.box
+
+	track.BorderSizePixel = 0
+	track.Parent =
+		f
+
+	corner(
+		track,
+		7
+	)
+
+	local knob =
+		Instance.new(
+			"Frame"
+		)
+
+	knob.Size =
+		UDim2.new(
+			0,
+			10,
+			0,
+			10
+		)
+
+	knob.Position =
+		getState()
+		and UDim2.new(
+			1,
+			-12,
+			0.5,
+			-5
+		)
+		or UDim2.new(
+			0,
+			2,
+			0.5,
+			-5
+		)
+
+	knob.BackgroundColor3 =
+		Color3.fromRGB(
+			255,
+			255,
+			255
+		)
+
+	knob.BorderSizePixel = 0
+	knob.Parent =
+		track
+
+	corner(
+		knob,
+		5
+	)
+
+	toggleVisuals[name] = {
+		track = track,
+		knob = knob
+	}
+
+	local btn =
+		Instance.new(
+			"TextButton"
+		)
+
+	btn.Size =
+		UDim2.new(
+			1,
+			0,
+			1,
+			0
+		)
+
+	btn.BackgroundTransparency = 1
+	btn.Text = ""
+
+	btn.Parent =
+		f
+
+	trackConnection(
+		btn.MouseButton1Click:
+			Connect(function()
+
+				if not runtimeAlive then
+					return
+				end
+
+				onChanged(
+					not getState(),
+					"ui"
+				)
+
+				updateToggleVisual(
+					name,
+					getState()
+				)
+			end)
+	)
+
+	return f
+end
+
+local slotsHint = nil
+
+local function mkSlotRow(text)
+
+	smallLabel(
+		text
+	)
+
+	local row =
+		Instance.new(
+			"Frame"
+		)
+
+	row.Size =
+		UDim2.new(
+			1,
+			0,
+			0,
+			26
+		)
+
+	row.BackgroundTransparency = 1
+	row.Parent =
+		rightCol
+
+	local rl =
+		Instance.new(
+			"UIListLayout"
+		)
+
+	rl.FillDirection =
+		Enum.FillDirection.Horizontal
+
+	rl.Padding =
+		UDim.new(
+			0,
+			4
+		)
+
+	rl.Parent =
+		row
+
+	for i = 1,5 do
+
+		local b =
+			Instance.new(
+				"TextButton"
+			)
+
+		b.Size =
+			UDim2.new(
+				0,
+				44,
+				1,
+				0
+			)
+
+		b.BackgroundColor3 =
+			S.buySlots[i]
+			and C.accent
+			or C.row
+
+		b.Text =
+			tostring(i)
+
+		b.TextColor3 =
+			S.buySlots[i]
+			and Color3.fromRGB(
+				255,
+				255,
+				255
+			)
+			or C.textDim
+
+		b.TextSize = 11
+		b.Font = FONT_B
+
+		b.BorderSizePixel = 0
+		b.AutoButtonColor = false
+
+		b.Parent =
+			row
+
+		corner(
+			b,
+			3
+		)
+
+		trackConnection(
+			b.MouseEnter:
+				Connect(function()
+
+					if not S.buySlots[i] then
+						b.BackgroundColor3 =
+							C.rowHov
+					end
+
+				end)
+		)
+
+		trackConnection(
+			b.MouseLeave:
+				Connect(function()
+
+					if not S.buySlots[i] then
+						b.BackgroundColor3 =
+							C.row
+					end
+
+				end)
+		)
+
+		trackConnection(
+			b.MouseButton1Click:
+				Connect(function()
+
+					S.buySlots[i] =
+						not S.buySlots[i]
+						or nil
+
+					if not next(
+						S.buySlots
+					) then
+
+						S.buySlots[i] =
+							true
+
+						toast(
+							"At least one slot must be on",
+							C.warn
+						)
+
+						return
+					end
+
+					b.BackgroundColor3 =
+						S.buySlots[i]
+						and C.accent
+						or C.row
+
+					b.TextColor3 =
+						S.buySlots[i]
+						and Color3.fromRGB(
+							255,
+							255,
+							255
+						)
+						or C.textDim
+
+					persist()
+
+					if updateSlotsHint then
+						updateSlotsHint()
+					end
+				end)
+		)
+	end
+end
+
+updateSlotsHint =
+	function()
+
+		if slotsHint
+			and slotsHint.Parent then
+
+			slotsHint.Text =
+				"buying: "
+				.. slotsString()
+		end
+	end
+
+local function mkNumberInput(
+	text,
+	getV,
+	setV
+)
+
+	local f =
+		Instance.new(
+			"Frame"
+		)
+
+	f.Size =
+		UDim2.new(
+			1,
+			0,
+			0,
+			24
+		)
+
+	f.BackgroundColor3 =
+		C.row
+
+	f.BackgroundTransparency =
+		0.4
+
+	f.BorderSizePixel = 0
+	f.Parent =
+		rightCol
+
+	corner(
+		f,
+		3
+	)
+
+	local l =
+		Instance.new(
+			"TextLabel"
+		)
+
+	l.Size =
+		UDim2.new(
+			0,
+			78,
+			1,
+			0
+		)
+
+	l.Position =
+		UDim2.new(
+			0,
+			8,
+			0,
+			0
+		)
+
+	l.BackgroundTransparency = 1
+
+	l.Text =
+		text
+
+	l.TextColor3 =
+		C.textDim
+
+	l.TextSize = 10
+	l.Font = FONT_M
+
+	l.TextXAlignment =
+		Enum.TextXAlignment.Left
+
+	l.Parent =
+		f
+
+	local box =
+		Instance.new(
+			"TextBox"
+		)
+
+	box.Size =
+		UDim2.new(
+			1,
+			-94,
+			1,
+			-6
+		)
+
+	box.Position =
+		UDim2.new(
+			0,
+			86,
+			0,
+			3
+		)
+
+	box.BackgroundColor3 =
+		C.bg
+
+	box.Text =
+		tostring(
+			getV()
+		)
+
+	box.TextColor3 =
+		C.text
+
+	box.TextSize = 11
+	box.Font = FONT_M
+
+	box.BorderSizePixel = 0
+	box.ClearTextOnFocus = false
+
+	box.Parent =
+		f
+
+	corner(
+		box,
+		3
+	)
+
+	trackConnection(
+		box.FocusLost:
+			Connect(function()
+
+				local n =
+					tonumber(
+						box.Text
+					)
+
+				if n then
+					setV(n)
+					persist()
+				end
+
+				box.Text =
+					tostring(
+						getV()
+					)
+			end)
+	)
+end
+
+local function mkTextInput(
+	text,
+	getV,
+	setV
+)
+
+	local f =
+		Instance.new(
+			"Frame"
+		)
+
+	f.Size =
+		UDim2.new(
+			1,
+			0,
+			0,
+			26
+		)
+
+	f.BackgroundColor3 =
+		C.row
+
+	f.BackgroundTransparency =
+		0.4
+
+	f.BorderSizePixel = 0
+	f.Parent =
+		rightCol
+
+	corner(
+		f,
+		3
+	)
+
+	local l =
+		Instance.new(
+			"TextLabel"
+		)
+
+	l.Size =
+		UDim2.new(
+			0,
+			76,
+			1,
+			0
+		)
+
+	l.Position =
+		UDim2.new(
+			0,
+			8,
+			0,
+			0
+		)
+
+	l.BackgroundTransparency = 1
+
+	l.Text =
+		text
+
+	l.TextColor3 =
+		C.textDim
+
+	l.TextSize = 10
+	l.Font = FONT_M
+
+	l.TextXAlignment =
+		Enum.TextXAlignment.Left
+
+	l.Parent =
+		f
+
+	local box =
+		Instance.new(
+			"TextBox"
+		)
+
+	box.Size =
+		UDim2.new(
+			1,
+			-84,
+			1,
+			-6
+		)
+
+	box.Position =
+		UDim2.new(
+			0,
+			84,
+			0,
+			3
+		)
+
+	box.BackgroundColor3 =
+		C.bg
+
+	box.Text =
+		tostring(
+			getV()
+		)
+
+	box.TextColor3 =
+		C.text
+
+	box.TextSize = 10
+	box.Font = FONT_M
+
+	box.BorderSizePixel = 0
+	box.ClearTextOnFocus = false
+
+	box.TextXAlignment =
+		Enum.TextXAlignment.Left
+
+	box.Parent =
+		f
+
+	corner(
+		box,
+		3
+	)
+
+	trackConnection(
+		box.FocusLost:
+			Connect(function()
+
+				setV(
+					box.Text
+				)
+
+				persist()
+			end)
+	)
+end
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  ITEM UI
+-- ═══════════════════════════════════════════════════════════════════════
+
+local searchQuery = ""
+
+local function clearScroll()
+
+	for _,ch in ipairs(
+		scroll:GetChildren()
+	) do
+
+		if not ch:IsA(
+			"UIListLayout"
+		)
+			and not ch:IsA(
+				"UIPadding"
+			) then
+
+			ch:Destroy()
+		end
+	end
+end
+
+local function activeSelectionTable()
+	if S.tab == "sell" then
+		return S.sell, ALL
+	elseif S.tab == "buy" then
+		return S.buy, ALL
+	elseif S.tab == "gear" then
+		return S.gear, ALL_GEAR
+	end
+
+	return S.sell, ALL
+end
+
+local function updateCounter()
+	if S.tab == "gear" then
+		local count = 0
+		for _ in pairs(S.gear) do
+			count += 1
+		end
+
+		counterLbl.Text =
+			("%d / %d"):format(
+				count,
+				#ALL_GEAR
+			)
+
+		return
+	end
+
+	local st =
+		S.tab == "sell"
+		and S.sell
+		or S.buy
+
+	local count = 0
+
+	for _ in pairs(st) do
+		count += 1
+	end
+
+	counterLbl.Text =
+		("%d / %d"):format(
+			count,
+			#ALL
+		)
+end
+
+local function mkCheckbox(
+	parent,
+	id,
+	stateTable,
+	mat
+)
+
+	local row =
+		Instance.new(
+			"Frame"
+		)
+
+	row.Size =
+		UDim2.new(
+			1,
+			0,
+			0,
+			22
+		)
+
+	row.BackgroundColor3 =
+		C.row
+
+	row.BackgroundTransparency =
+		0.4
+
+	row.BorderSizePixel = 0
+	row.Parent =
+		parent
+
+	corner(
+		row,
+		3
+	)
+
+	local strip =
+		Instance.new(
+			"Frame"
+		)
+
+	strip.Size =
+		UDim2.new(
+			0,
+			3,
+			1,
+			0
+		)
+
+	strip.BackgroundColor3 =
+		TIER_COLORS[mat]
+		or C.accentD
+
+	strip.BorderSizePixel = 0
+	strip.Parent =
+		row
+
+	corner(
+		strip,
+		3
+	)
+
+	local box =
+		Instance.new(
+			"Frame"
+		)
+
+	box.Size =
+		UDim2.new(
+			0,
+			14,
+			0,
+			14
+		)
+
+	box.Position =
+		UDim2.new(
+			0,
+			10,
+			0.5,
+			-7
+		)
+
+	box.BackgroundColor3 =
+		stateTable[id]
+		and C.accent
+		or C.box
+
+	box.BorderSizePixel = 0
+	box.Parent =
+		row
+
+	corner(
+		box,
+		3
+	)
+
+	local check =
+		Instance.new(
+			"TextLabel"
+		)
+
+	check.Size =
+		UDim2.new(
+			1,
+			0,
+			1,
+			0
+		)
+
+	check.BackgroundTransparency = 1
+	check.Text = "✓"
+
+	check.TextColor3 =
+		Color3.fromRGB(
+			255,
+			255,
+			255
+		)
+
+	check.TextSize = 11
+	check.Font = FONT_B
+
+	check.Visible =
+		stateTable[id]
+		and true
+		or false
+
+	check.Parent =
+		box
+
+	local lbl =
+		Instance.new(
+			"TextLabel"
+		)
+
+	lbl.Size =
+		UDim2.new(
+			1,
+			-40,
+			1,
+			0
+		)
+
+	lbl.Position =
+		UDim2.new(
+			0,
+			32,
+			0,
+			0
+		)
+
+	lbl.BackgroundTransparency = 1
+
+	lbl.Text =
+		idToDisplay(id)
+
+	lbl.TextColor3 =
+		C.text
+
+	lbl.TextSize = 12
+	lbl.Font = FONT_M
+
+	lbl.TextXAlignment =
+		Enum.TextXAlignment.Left
+
+	lbl.Parent =
+		row
+
+	local btn =
+		Instance.new(
+			"TextButton"
+		)
+
+	btn.Size =
+		UDim2.new(
+			1,
+			0,
+			1,
+			0
+		)
+
+	btn.BackgroundTransparency = 1
+	btn.Text = ""
+
+	btn.Parent =
+		row
+
+	trackConnection(
+		btn.MouseEnter:
+			Connect(function()
+				row.BackgroundColor3 =
+					C.rowHov
+			end)
+	)
+
+	trackConnection(
+		btn.MouseLeave:
+			Connect(function()
+				row.BackgroundColor3 =
+					C.row
+			end)
+	)
+
+	trackConnection(
+		btn.MouseButton1Click:
+			Connect(function()
+
+				stateTable[id] =
+					not stateTable[id]
+
+				box.BackgroundColor3 =
+					stateTable[id]
+					and C.accent
+					or C.box
+
+				check.Visible =
+					stateTable[id]
+					and true
+					or false
+
+				persist()
+				updateCounter()
+
+			end)
+	)
+
+	return row
+end
+
+
+local function mkGearCheckbox(
+	parent,
+	id,
+	stateTable
+)
+
+	local row =
+		Instance.new(
+			"Frame"
+		)
+
+	row.Size =
+		UDim2.new(
+			1,
+			0,
+			0,
+			22
+		)
+
+	row.BackgroundColor3 =
+		C.row
+
+	row.BackgroundTransparency =
+		0.4
+
+	row.BorderSizePixel = 0
+	row.Parent = parent
+
+	corner(row, 3)
+
+	local tier =
+		gearTier(id)
+
+	local strip =
+		Instance.new(
+			"Frame"
+		)
+
+	strip.Size =
+		UDim2.new(
+			0,
+			3,
+			1,
+			0
+		)
+
+	strip.BackgroundColor3 =
+		GEAR_TIER_COLORS[tier]
+		or C.accentD
+
+	strip.BorderSizePixel = 0
+	strip.Parent = row
+
+	corner(strip, 3)
+
+	local box =
+		Instance.new(
+			"Frame"
+		)
+
+	box.Size =
+		UDim2.new(
+			0,
+			14,
+			0,
+			14
+		)
+
+	box.Position =
+		UDim2.new(
+			0,
+			10,
+			0.5,
+			-7
+		)
+
+	box.BackgroundColor3 =
+		stateTable[id]
+		and C.accent
+		or C.box
+
+	box.BorderSizePixel = 0
+	box.Parent = row
+
+	corner(box, 3)
+
+	local check =
+		Instance.new(
+			"TextLabel"
+		)
+
+	check.Size =
+		UDim2.new(
+			1,
+			0,
+			1,
+			0
+		)
+
+	check.BackgroundTransparency = 1
+	check.Text = "✓"
+	check.TextColor3 =
+		Color3.fromRGB(
+			255,
+			255,
+			255
+		)
+
+	check.TextSize = 11
+	check.Font = FONT_B
+	check.Visible =
+		stateTable[id] == true
+
+	check.Parent = box
+
+	local lbl =
+		Instance.new(
+			"TextLabel"
+		)
+
+	lbl.Size =
+		UDim2.new(
+			1,
+			-40,
+			1,
+			0
+		)
+
+	lbl.Position =
+		UDim2.new(
+			0,
+			32,
+			0,
+			0
+		)
+
+	lbl.BackgroundTransparency = 1
+	lbl.Text = gearDisplay(id)
+	lbl.TextColor3 = C.text
+	lbl.TextSize = 12
+	lbl.Font = FONT_M
+	lbl.TextXAlignment =
+		Enum.TextXAlignment.Left
+
+	lbl.Parent = row
+
+	local btn =
+		Instance.new(
+			"TextButton"
+		)
+
+	btn.Size =
+		UDim2.new(
+			1,
+			0,
+			1,
+			0
+		)
+
+	btn.BackgroundTransparency = 1
+	btn.Text = ""
+	btn.Parent = row
+
+	trackConnection(
+		btn.MouseEnter:
+			Connect(function()
+				row.BackgroundColor3 = C.rowHov
+			end)
+	)
+
+	trackConnection(
+		btn.MouseLeave:
+			Connect(function()
+				row.BackgroundColor3 = C.row
+			end)
+	)
+
+	trackConnection(
+		btn.MouseButton1Click:
+			Connect(function()
+
+				stateTable[id] =
+					not stateTable[id]
+
+				box.BackgroundColor3 =
+					stateTable[id]
+					and C.accent
+					or C.box
+
+				check.Visible =
+					stateTable[id] == true
+
+				persist()
+				updateCounter()
+			end)
+	)
+
+	return row
+end
+
+local function mkGearCategory(
+	parent,
+	catKey,
+	label,
+	ids
+)
+
+	local filtered = {}
+
+	for _,id in ipairs(ids) do
+		if searchQuery == ""
+			or gearDisplay(id):lower():find(
+				searchQuery,
+				1,
+				true
+			)
+			or id:lower():find(
+				searchQuery,
+				1,
+				true
+			)
+		then
+			table.insert(filtered, id)
+		end
+	end
+
+	if #filtered == 0 then
+		return
+	end
+
+	local wrap =
+		Instance.new(
+			"Frame"
+		)
+
+	wrap.Size =
+		UDim2.new(
+			1,
+			0,
+			0,
+			0
+		)
+
+	wrap.AutomaticSize =
+		Enum.AutomaticSize.Y
+
+	wrap.BackgroundColor3 =
+		C.panel2
+
+	wrap.BackgroundTransparency =
+		0.3
+
+	wrap.BorderSizePixel = 0
+	wrap.Parent = parent
+
+	corner(wrap, 4)
+
+	local list =
+		Instance.new(
+			"UIListLayout"
+		)
+
+	list.SortOrder =
+		Enum.SortOrder.LayoutOrder
+
+	list.Padding =
+		UDim.new(
+			0,
+			4
+		)
+
+	list.Parent = wrap
+
+	local header =
+		Instance.new(
+			"Frame"
+		)
+
+	header.Size =
+		UDim2.new(
+			1,
+			0,
+			0,
+			28
+		)
+
+	header.BackgroundColor3 =
+		C.header
+
+	header.BorderSizePixel = 0
+	header.Parent = wrap
+
+	corner(header, 4)
+
+	local title =
+		Instance.new(
+			"TextLabel"
+		)
+
+	title.Size =
+		UDim2.new(
+			1,
+			-100,
+			1,
+			0
+		)
+
+	title.Position =
+		UDim2.new(
+			0,
+			12,
+			0,
+			0
+		)
+
+	title.BackgroundTransparency = 1
+	title.Text = label
+	title.TextColor3 = C.text
+	title.TextSize = 12
+	title.Font = FONT_B
+	title.TextXAlignment =
+		Enum.TextXAlignment.Left
+
+	title.Parent = header
+
+	local all =
+		Instance.new(
+			"TextButton"
+		)
+
+	all.Size =
+		UDim2.new(
+			0,
+			36,
+			0,
+			18
+		)
+
+	all.Position =
+		UDim2.new(
+			1,
+			-78,
+			0.5,
+			-9
+		)
+
+	all.BackgroundColor3 = C.row
+	all.Text = "ALL"
+	all.TextColor3 = C.ok
+	all.TextSize = 9
+	all.Font = FONT_B
+	all.BorderSizePixel = 0
+	all.AutoButtonColor = false
+	all.Parent = header
+
+	corner(all, 3)
+
+	local none =
+		Instance.new(
+			"TextButton"
+		)
+
+	none.Size =
+		UDim2.new(
+			0,
+			36,
+			0,
+			18
+		)
+
+	none.Position =
+		UDim2.new(
+			1,
+			-38,
+			0.5,
+			-9
+		)
+
+	none.BackgroundColor3 = C.row
+	none.Text = "NONE"
+	none.TextColor3 = C.textDim
+	none.TextSize = 9
+	none.Font = FONT_B
+	none.BorderSizePixel = 0
+	none.AutoButtonColor = false
+	none.Parent = header
+
+	corner(none, 3)
+
+	trackConnection(
+		all.MouseButton1Click:
+			Connect(function()
+				for _,id in ipairs(ids) do
+					S.gear[id] = true
+				end
+				persist()
+				rebuild()
+			end)
+	)
+
+	trackConnection(
+		none.MouseButton1Click:
+			Connect(function()
+				for _,id in ipairs(ids) do
+					S.gear[id] = nil
+				end
+				persist()
+				rebuild()
+			end)
+	)
+
+	for _,id in ipairs(filtered) do
+		mkGearCheckbox(
+			wrap,
+			id,
+			S.gear
+		)
+	end
+end
+
+local function mkCategory(
+	parent,
+	catKey,
+	label,
+	ids,
+	stateTable,
+	collapsedTbl
+)
+
+	if searchQuery ~= "" then
+
+		local any = false
+
+		for _,id in ipairs(
+			ids
+		) do
+
+			if id:lower():find(
+				searchQuery,
+				1,
+				true
+			) then
+
+				any = true
+				break
+			end
+		end
+
+		if not any then
+			return
+		end
+	end
+
+	local wrap =
+		Instance.new(
+			"Frame"
+		)
+
+	wrap.Size =
+		UDim2.new(
+			1,
+			0,
+			0,
+			0
+		)
+
+	wrap.AutomaticSize =
+		Enum.AutomaticSize.Y
+
+	wrap.BackgroundColor3 =
+		C.panel2
+
+	wrap.BackgroundTransparency =
+		0.3
+
+	wrap.BorderSizePixel = 0
+
+	wrap.Parent =
+		parent
+
+	corner(
+		wrap,
+		4
+	)
+
+	local wl =
+		Instance.new(
+			"UIListLayout"
+		)
+
+	wl.SortOrder =
+		Enum.SortOrder.LayoutOrder
+
+	wl.Parent =
+		wrap
+
+	local header =
+		Instance.new(
+			"Frame"
+		)
+
+	header.Size =
+		UDim2.new(
+			1,
+			0,
+			0,
+			28
+		)
+
+	header.BackgroundColor3 =
+		C.header
+
+	header.BorderSizePixel = 0
+
+	header.LayoutOrder = 1
+	header.Parent =
+		wrap
+
+	corner(
+		header,
+		4
+	)
+
+	local arrow =
+		Instance.new(
+			"TextLabel"
+		)
+
+	arrow.Size =
+		UDim2.new(
+			0,
+			20,
+			1,
+			0
+		)
+
+	arrow.Position =
+		UDim2.new(
+			0,
+			8,
+			0,
+			0
+		)
+
+	arrow.BackgroundTransparency = 1
+
+	arrow.Text =
+		collapsedTbl[
+			catKey
+		]
+		and "▶"
+		or "▼"
+
+	arrow.TextColor3 =
+		C.accent
+
+	arrow.TextSize = 10
+	arrow.Font = FONT_B
+
+	arrow.Parent =
+		header
+
+	local title =
+		Instance.new(
+			"TextLabel"
+		)
+
+	title.Size =
+		UDim2.new(
+			0,
+			200,
+			1,
+			0
+		)
+
+	title.Position =
+		UDim2.new(
+			0,
+			26,
+			0,
+			0
+		)
+
+	title.BackgroundTransparency = 1
+
+	title.Text =
+		label
+
+	title.TextColor3 =
+		C.text
+
+	title.TextSize = 12
+	title.Font = FONT_B
+
+	title.TextXAlignment =
+		Enum.TextXAlignment.Left
+
+	title.Parent =
+		header
+
+	local countSel =
+		Instance.new(
+			"TextLabel"
+		)
+
+	countSel.Size =
+		UDim2.new(
+			0,
+			80,
+			1,
+			0
+		)
+
+	countSel.Position =
+		UDim2.new(
+			1,
+			-170,
+			0,
+			0
+		)
+
+	countSel.BackgroundTransparency = 1
+	countSel.Text = ""
+
+	countSel.TextColor3 =
+		C.ok
+
+	countSel.TextSize = 10
+	countSel.Font = FONT_M
+
+	countSel.TextXAlignment =
+		Enum.TextXAlignment.Right
+
+	countSel.Parent =
+		header
+
+	local countAll =
+		Instance.new(
+			"TextLabel"
+		)
+
+	countAll.Size =
+		UDim2.new(
+			0,
+			60,
+			1,
+			0
+		)
+
+	countAll.Position =
+		UDim2.new(
+			1,
+			-90,
+			0,
+			0
+		)
+
+	countAll.BackgroundTransparency = 1
+
+	countAll.Text =
+		("[%d]"):format(
+			#ids
+		)
+
+	countAll.TextColor3 =
+		C.textDim
+
+	countAll.TextSize = 10
+	countAll.Font = FONT_M
+
+	countAll.TextXAlignment =
+		Enum.TextXAlignment.Right
+
+	countAll.Parent =
+		header
+
+	local catAll =
+		Instance.new(
+			"TextButton"
+		)
+
+	catAll.Size =
+		UDim2.new(
+			0,
+			34,
+			0,
+			18
+		)
+
+	catAll.Position =
+		UDim2.new(
+			1,
+			-62,
+			0.5,
+			-9
+		)
+
+	catAll.BackgroundColor3 =
+		C.row
+
+	catAll.Text =
+		"ALL"
+
+	catAll.TextColor3 =
+		C.ok
+
+	catAll.TextSize = 9
+	catAll.Font = FONT_B
+
+	catAll.BorderSizePixel = 0
+	catAll.AutoButtonColor = false
+
+	catAll.Parent =
+		header
+
+	corner(
+		catAll,
+		3
+	)
+
+	local catNone =
+		Instance.new(
+			"TextButton"
+		)
+
+	catNone.Size =
+		UDim2.new(
+			0,
+			34,
+			0,
+			18
+		)
+
+	catNone.Position =
+		UDim2.new(
+			1,
+			-24,
+			0.5,
+			-9
+		)
+
+	catNone.BackgroundColor3 =
+		C.row
+
+	catNone.Text =
+		"NONE"
+
+	catNone.TextColor3 =
+		C.err
+
+	catNone.TextSize = 9
+	catNone.Font = FONT_B
+
+	catNone.BorderSizePixel = 0
+	catNone.AutoButtonColor = false
+
+	catNone.Parent =
+		header
+
+	corner(
+		catNone,
+		3
+	)
+
+	local content =
+		Instance.new(
+			"Frame"
+		)
+
+	content.Size =
+		UDim2.new(
+			1,
+			0,
+			0,
+			0
+		)
+
+	content.AutomaticSize =
+		Enum.AutomaticSize.Y
+
+	content.BackgroundTransparency = 1
+
+	content.LayoutOrder = 2
+
+	content.Visible =
+		not collapsedTbl[
+			catKey
+		]
+
+	content.Parent =
+		wrap
+
+	local cl =
+		Instance.new(
+			"UIListLayout"
+		)
+
+	cl.SortOrder =
+		Enum.SortOrder.LayoutOrder
+
+	cl.Padding =
+		UDim.new(
+			0,
+			2
+		)
+
+	cl.Parent =
+		content
+
+	pad(
+		content,
+		4,
+		6,
+		6,
+		6
+	)
+
+	local function refreshCount()
+
+		local n = 0
+
+		for _,id in ipairs(
+			ids
+		) do
+
+			if stateTable[id] then
+				n += 1
+			end
+		end
+
+		if countSel
+			and countSel.Parent then
+
+			countSel.Text =
+				("✓ %d"):format(
+					n
+				)
+		end
+	end
+
+	for i,id in ipairs(
+		ids
+	) do
+
+		local mat =
+			id:match(
+				"^(.-)%-"
+			)
+			or ""
+
+		local row =
+			mkCheckbox(
+				content,
+				id,
+				stateTable,
+				mat
+			)
+
+		row.LayoutOrder = i
+	end
+
+	local refreshConn =
+		RunService.Heartbeat:
+			Connect(
+				refreshCount
+			)
+
+	trackConnection(
+		refreshConn
+	)
+
+	trackConnection(
+		catAll.MouseButton1Click:
+			Connect(function()
+
+				for _,id in ipairs(
+					ids
+				) do
+
+					stateTable[id] =
+						true
+				end
+
+				persist()
+
+				if rebuild then
+					rebuild()
+				end
+
+				updateCounter()
+
+				toast(
+					("Selected %s")
+					:format(
+						catKey
+					),
+					C.ok
+				)
+
+			end)
+	)
+
+	trackConnection(
+		catNone.MouseButton1Click:
+			Connect(function()
+
+				for _,id in ipairs(
+					ids
+				) do
+
+					stateTable[id] =
+						nil
+				end
+
+				persist()
+
+				if rebuild then
+					rebuild()
+				end
+
+				updateCounter()
+
+				toast(
+					("Unselected %s")
+					:format(
+						catKey
+					),
+					C.textDim
+				)
+
+			end)
+	)
+
+	local hBtn =
+		Instance.new(
+			"TextButton"
+		)
+
+	hBtn.Size =
+		UDim2.new(
+			1,
+			-140,
+			1,
+			0
+		)
+
+	hBtn.Position =
+		UDim2.new(
+			0,
+			0,
+			0,
+			0
+		)
+
+	hBtn.BackgroundTransparency = 1
+	hBtn.Text = ""
+
+	hBtn.Parent =
+		header
+
+	trackConnection(
+		hBtn.MouseButton1Click:
+			Connect(function()
+
+				collapsedTbl[
+					catKey
+				] =
+					not collapsedTbl[
+						catKey
+					]
+
+				content.Visible =
+					not collapsedTbl[
+						catKey
+					]
+
+				arrow.Text =
+					collapsedTbl[
+						catKey
+					]
+					and "▶"
+					or "▼"
+
+			end)
+	)
+
+	refreshCount()
+end
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  STATUS
+-- ═══════════════════════════════════════════════════════════════════════
+
+local status =
+	Instance.new(
+		"Frame"
+	)
+
+status.Size =
+	UDim2.new(
+		1,
+		-12,
+		0,
+		26
+	)
+
+status.Position =
+	UDim2.new(
+		0,
+		6,
+		1,
+		-32
+	)
+
+status.BackgroundColor3 =
+	C.panel
+
+status.BorderSizePixel = 0
+status.Parent =
+	main
+
+corner(
+	status,
+	4
+)
+
+local statusDot =
+	Instance.new(
+		"Frame"
+	)
+
+statusDot.Size =
+	UDim2.new(
+		0,
+		8,
+		0,
+		8
+	)
+
+statusDot.Position =
+	UDim2.new(
+		0,
+		10,
+		0.5,
+		-4
+	)
+
+statusDot.BackgroundColor3 =
+	C.textDim
+
+statusDot.BorderSizePixel = 0
+statusDot.Parent =
+	status
+
+corner(
+	statusDot,
+	4
+)
+
+local statusLbl =
+	Instance.new(
+		"TextLabel"
+	)
+
+statusLbl.Size =
+	UDim2.new(
+		1,
+		-40,
+		1,
+		0
+	)
+
+statusLbl.Position =
+	UDim2.new(
+		0,
+		26,
+		0,
+		0
+	)
+
+statusLbl.BackgroundTransparency = 1
+
+statusLbl.Text =
+	"idle"
+
+statusLbl.TextColor3 =
+	C.textDim
+
+statusLbl.TextSize = 11
+statusLbl.Font = FONT_M
+
+statusLbl.TextXAlignment =
+	Enum.TextXAlignment.Left
+
+statusLbl.Parent =
+	status
+
+local function setStatus(
+	txt,
+	col
+)
+
+	statusLbl.Text =
+		txt
+
+	statusDot.BackgroundColor3 =
+		col or C.textDim
+end
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  AUTO SELL
+-- ═══════════════════════════════════════════════════════════════════════
+
+local function sellPass(
+	workerId
+)
+
+	local char =
+		LP.Character
+
+	if not char then
+		return
+	end
+
+	local hum =
+		char:FindFirstChildOfClass(
+			"Humanoid"
+		)
+
+	local backpack =
+		LP:FindFirstChild(
+			"Backpack"
+		)
+
+	if not hum
+		or not backpack then
+
+		return
+	end
+
+	for _,tool in ipairs(
+		backpack:GetChildren()
+	) do
+
+		if
+			not runtimeAlive
+			or not running.sell
+			or workerId ~= sellRunId
+		then
+			break
+		end
+
+		if tool:IsA("Tool") then
+
+			local id =
+				displayToId(
+					tool.Name
+				)
+
+			if
+				id
+				and S.sell[id] == true
+			then
+
+				hum:EquipTool(
+					tool
+				)
+
+				task.wait(
+					math.max(
+						0.03,
+						tonumber(
+							S.sellEquipDelay
+						)
+						or 0.15
+					)
+				)
+
+				if not remoteAlive(
+					sellEvent
+				) then
+
+					refreshRemotes()
+				end
+
+				if remoteAlive(
+					sellEvent
+				) then
+
+					local ok =
+						pcall(function()
+
+							sellEvent:
+								FireServer()
+
+						end)
+
+					if ok then
+						stats.sells += 1
+					end
+				end
+
+				task.wait(
+					math.max(
+						0.03,
+						tonumber(
+							S.sellDelay
+						)
+						or 0.30
+					)
+				)
+			end
+		end
+	end
+end
+
+local function beginSellWorker(
+	workerId
+)
+
+	task.spawn(function()
+
+		while
+			runtimeAlive
+			and running.sell
+			and workerId == sellRunId
+		do
+
+			local ok,err =
+				xpcall(
+					function()
+						sellPass(
+							workerId
+						)
+					end,
+					debug.traceback
+				)
+
+			if not ok then
+
+				warn(
+					"[nexus] SELL worker recovered:\n"
+					.. tostring(
+						err
+					)
+				)
+
+				task.wait(
+					0.5
+				)
+			end
+
+			if
+				runtimeAlive
+				and running.sell
+				and workerId == sellRunId
+			then
+
+				task.wait(
+					0.30
+				)
+			end
+		end
+	end)
+end
+
+setSellEnabled =
+	function(
+		enabled,
+		source
+	)
+
+		if not runtimeAlive then
+			return
+		end
+
+		local now =
+			os.clock()
+
+		if
+			source ~= "shutdown"
+			and
+			(
+				now
+				- lastSellToggle
+			)
+			< SELL_TOGGLE_DEBOUNCE
+		then
+
+			return
+		end
+
+		if running.sell == enabled then
+			return
+		end
+
+		lastSellToggle =
+			now
+
+		if enabled then
+
+			running.sell = true
+
+			sellRunId += 1
+
+			local workerId =
+				sellRunId
+
+			if stats.startTime == 0 then
+				stats.startTime =
+					tick()
+			end
+
+			refreshRemotes()
+
+			if not remoteAlive(
+				sellEvent
+			) then
+
+				running.sell = false
+
+				toast(
+					"sell remote not found!",
+					C.err
+				)
+
+				updateToggleVisual(
+					"sell",
+					false
+				)
+
+				return
+			end
+
+			toast(
+				"Auto Sell ON",
+				C.ok
+			)
+
+			if S.sounds then
+				beep(
+					9118823102
+				)
+			end
+
+			updateToggleVisual(
+				"sell",
+				true
+			)
+
+			beginSellWorker(
+				workerId
+			)
+
+		else
+
+			sellRunId += 1
+
+			running.sell = false
+
+			toast(
+				"Auto Sell OFF",
+				C.textDim
+			)
+
+			if S.sounds then
+				beep(
+					9118823102
+				)
+			end
+
+			updateToggleVisual(
+				"sell",
+				false
+			)
+		end
+	end
+
+startSell =
+	function()
+		setSellEnabled(
+			true,
+			"api"
+		)
+	end
+
+stopSell =
+	function()
+		setSellEnabled(
+			false,
+			"api"
+		)
+	end
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  ROLL
+-- ═══════════════════════════════════════════════════════════════════════
+
+local function fmtTime(sec)
+
+	sec =
+		math.floor(sec)
+
+	local m =
+		math.floor(
+			sec / 60
+		)
+
+	local s =
+		sec % 60
+
+	return (
+		"%d:%02d"
+	):format(
+		m,
+		s
+	)
+end
+
+local function refreshStatus()
+
+	if not runtimeAlive then
+		return
+	end
+
+	local parts = {}
+
+	if running.sell then
+		table.insert(
+			parts,
+			"SELL"
+		)
+	end
+
+	if running.roll then
+		table.insert(
+			parts,
+			"ROLL"
+		)
+	end
+
+	if running.buy then
+		table.insert(
+			parts,
+			"BUY"
+		)
+	end
+
+	if running.gear then
+		table.insert(
+			parts,
+			"GEAR"
+		)
+	end
+
+	if running.airship then
+		table.insert(
+			parts,
+			"AIRSHIP"
+		)
+	end
+
+	if #parts == 0 then
+
+		setStatus(
+			(
+				"idle · sold:%d rolls:%d buys:%d gear:%d air:%d skips:%d"
+			):format(
+				stats.sells,
+				stats.rolls,
+				stats.buys,
+				stats.gearBuys,
+				stats.airshipBuys,
+				stats.skips
+			),
+			C.textDim
+		)
+
+		return
+	end
+
+	local t =
+		stats.startTime > 0
+		and fmtTime(
+			tick()
+			- stats.startTime
+		)
+		or "0:00"
+
+	setStatus(
+		(
+			"%s · sold:%d rolls:%d buys:%d gear:%d air:%d · %s"
+		):format(
+			table.concat(
+				parts,
+				" + "
+			),
+			stats.sells,
+			stats.rolls,
+			stats.buys,
+			stats.gearBuys,
+			stats.airshipBuys,
+			t
+		),
+		C.ok
+	)
+end
+
+local function performRoll()
+
+    if rollBusy then
+        return false,
+            "roll busy"
+    end
+
+    rollBusy = true
+
+    local ok,success,reason =
+        xpcall(
+            function()
+
+                local rm =
+                    findMyRollMachine()
+
+                if not rm then
+                    return false,
+                        "roll machine not found"
+                end
+
+                local prompt =
+                    findRollPrompt(
+                        rm
+                    )
+
+                if not prompt then
+                    return false,
+                        "roll prompt not found"
+                end
+
+                local activated =
+                    triggerPrompt(
+                        prompt
+                    )
+
+                if activated then
+                    stats.rolls += 1
+                    lastRollActivity = tick()
+                    return true,
+                        "prompt"
+                end
+
+                return false,
+                    "prompt trigger failed"
+
+            end,
+            debug.traceback
+        )
+
+    rollBusy = false
+
+    if not ok then
+        return false,
+            tostring(success)
+    end
+
+    return
+        success == true,
+        reason
+end
+
+startRoll =
+	function()
+
+		if
+			not runtimeAlive
+			or running.roll
+		then
+
+			return
+		end
+
+		running.roll = true
+
+		if stats.startTime == 0 then
+			stats.startTime =
+				tick()
+		end
+
+		toast(
+			"Auto Roll ON",
+			C.ok
+		)
+
+		if S.sounds then
+			beep(
+				9118823102
+			)
+		end
+
+		updateToggleVisual(
+			"roll",
+			true
+		)
+
+		task.spawn(function()
+
+			while
+				runtimeAlive
+				and running.roll
+			do
+
+				local ok,err =
+					xpcall(
+						function()
+							performRoll()
+						end,
+						debug.traceback
+					)
+
+				if not ok then
+
+					warn(
+						"[nexus] ROLL worker recovered:\n"
+						.. tostring(
+							err
+						)
+					)
+
+					task.wait(
+						0.4
+					)
+				end
+
+				if
+					runtimeAlive
+					and running.roll
+				then
+
+					task.wait(
+						math.max(
+							0.05,
+							tonumber(
+								S.rollDelay
+							)
+							or 0.40
+						)
+					)
+				end
+			end
+		end)
+	end
+
+stopRoll =
+	function()
+
+		if not running.roll then
+			updateToggleVisual(
+				"roll",
+				false
+			)
+
+			return
+		end
+
+		running.roll = false
+
+		updateToggleVisual(
+			"roll",
+			false
+		)
+
+		toast(
+			"Auto Roll OFF",
+			C.textDim
+		)
+
+		if S.sounds then
+			beep(
+				9118823102
+			)
+		end
+	end
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  AUTO BUY
+--
+--  IMPORTANT:
+--  THERE IS NO performRoll() CALL HERE.
+--  AUTO BUY ONLY READS SLOTS AND SENDS PURCHASE REQUESTS.
+-- ═══════════════════════════════════════════════════════════════════════
+
+local function normalizeCandidate(text)
+    if type(text) ~= "string" then
+        return nil
+    end
+
+    local s = text:lower()
+    s = s:gsub("[^%w%s%-]", " ")
+    s = s:gsub("%s+", " ")
+    s = s:gsub("^%s+", "")
+    s = s:gsub("%s+$", "")
+    return s
+end
+
+local ITEM_LOOKUP = {}
+for _, item in ipairs(ALL) do
+    ITEM_LOOKUP[item.id] = {
+        id = item.id,
+        display = idToDisplay(item.id):lower(),
+        material = item.mat:lower(),
+        cat = item.cat:lower()
+    }
+end
+
+local function detectSlotItemId(slotInst)
+    if not slotInst then
+        return nil
+    end
+
+    local candidates = {}
+
+    local function addCandidate(v)
+        if typeof(v) == "Instance" then
+            candidates[#candidates + 1] = v.Name
+            candidates[#candidates + 1] = v:GetFullName()
+        elseif type(v) == "string" then
+            candidates[#candidates + 1] = v
+        end
+    end
+
+    local function scanAttributes(obj)
+        local attrs = obj:GetAttributes()
+        for key, value in pairs(attrs) do
+            local lk = tostring(key):lower()
+            if string.find(lk, "part", 1, true)
+                or string.find(lk, "item", 1, true)
+                or lk == "id"
+                or string.find(lk, "name", 1, true)
+            then
+                addCandidate(value)
+            end
+        end
+    end
+
+    scanAttributes(slotInst)
+
+    for _, obj in ipairs(slotInst:GetDescendants()) do
+        scanAttributes(obj)
+
+        if obj:IsA("StringValue") then
+            addCandidate(obj.Value)
+        elseif obj:IsA("ObjectValue") and obj.Value then
+            addCandidate(obj.Value)
+        elseif obj:IsA("Model") or obj:IsA("BasePart") then
+            addCandidate(obj.Name)
+        elseif obj:IsA("TextLabel") or obj:IsA("TextButton") then
+            addCandidate(obj.Text)
+        end
+    end
+
+    for _, raw in ipairs(candidates) do
+        local c = normalizeCandidate(raw)
+        if c then
+            for id, info in pairs(ITEM_LOOKUP) do
+                local nid = normalizeCandidate(id)
+                if c == nid
+                    or c == normalizeCandidate(info.display)
+                    or string.find(c, nid, 1, true)
+                    or string.find(c, normalizeCandidate(info.display), 1, true)
+                then
+                    return id
+                end
+            end
+        end
+    end
+
+    return nil
+end
+
+local function findPurchasePrompt(slotInst)
+    if not slotInst then
+        return nil
+    end
+
+    for _, obj in ipairs(slotInst:GetDescendants()) do
+        if obj:IsA("ProximityPrompt")
+            and obj.Enabled ~= false
+            and obj.ActionText == "Purchase"
+        then
+            return obj
+        end
+    end
+
+    return nil
+end
+
+local function autoBuyPass(
+	selectedItems
+)
+
+	local rm = findMyRollMachine()
+
+	if not rm then
+		return 0
+	end
+
+	local selectedSlots = getSelectedSlots()
+
+	if #selectedSlots == 0 then
+		return 0
+	end
+
+	local ready = {}
+
+	-- Collect every ready Purchase prompt first.
+	-- There is intentionally no per-slot wait here.
+	for _, slotNum in ipairs(selectedSlots) do
+
+		if not runtimeAlive or not running.buy then
+			break
+		end
+
+		local slotInst = rm:FindFirstChild("slot" .. slotNum, true)
+
+		if slotInst then
+			local prompt = findPurchasePrompt(slotInst)
+
+			if prompt then
+				local itemId = detectSlotItemId(slotInst)
+				local shouldBuy =
+					(itemId and selectedItems[itemId] == true)
+					or (itemId == nil and S.buyUnknown)
+
+				if shouldBuy then
+					ready[#ready + 1] = {
+						slot = slotNum,
+						prompt = prompt,
+						itemId = itemId,
+					}
+				else
+					stats.skips += 1
+				end
+			end
+		end
+	end
+
+	if #ready == 0 then
+		return 0
+	end
+
+	-- Trigger every ready Purchase prompt concurrently.
+	-- triggerPrompt prefers fireproximityprompt when available,
+	-- so zero-hold prompts are handled immediately.
+	for _, entry in ipairs(ready) do
+		task.spawn(function()
+			if not runtimeAlive or not running.buy then
+				return
+			end
+
+			local ok = triggerPrompt(entry.prompt)
+
+			if ok then
+				stats.buys += 1
+				lastBuyActivity = tick()
+			end
+		end)
+	end
+
+	return #ready
+end
+
+
+startBuy =
+	function()
+
+		if
+			not runtimeAlive
+			or running.buy
+		then
+			return
+		end
+
+		local selectedItems = {}
+
+		for id,value in pairs(
+			S.buy
+		) do
+
+			if value == true then
+				selectedItems[id] = true
+			end
+		end
+
+		if not next(
+			selectedItems
+		) then
+
+			toast(
+				"No items selected for buy!",
+				C.warn
+			)
+
+			return
+		end
+
+		local selectedCount = 0
+
+		for _ in pairs(
+			selectedItems
+		) do
+			selectedCount += 1
+		end
+
+		running.buy = true
+
+		if stats.startTime == 0 then
+			stats.startTime =
+				tick()
+		end
+
+		toast(
+			(
+				"Auto Buy ON · %d items"
+			):format(
+				selectedCount
+			),
+			C.ok
+		)
+
+		if S.sounds then
+			beep(
+				9118823102
+			)
+		end
+
+		updateToggleVisual(
+			"buy",
+			true
+		)
+
+		task.spawn(function()
+
+			while
+				runtimeAlive
+				and running.buy
+			do
+
+				local ok,err =
+					xpcall(
+						function()
+
+							-- Refresh selected items.
+							selectedItems = {}
+
+							for id,value in pairs(
+								S.buy
+							) do
+
+								if value == true then
+									selectedItems[id] =
+										true
+								end
+							end
+
+							-- IMPORTANT:
+							-- NO ROLL HERE.
+							--
+							-- Auto Buy simply checks the
+							-- currently displayed slots.
+							autoBuyPass(
+								selectedItems
+							)
+
+							task.wait(math.max(0.03, tonumber(S.buyDelay) or 0.08))
+
+						end,
+						debug.traceback
+					)
+
+				if not ok then
+
+					warn(
+						"[nexus] BUY worker recovered:\n"
+						.. tostring(
+							err
+						)
+					)
+
+					task.wait(
+						0.5
+					)
+				end
+			end
+		end)
+	end
+
+stopBuy =
+	function()
+
+		if not running.buy then
+
+			updateToggleVisual(
+				"buy",
+				false
+			)
+
+			return
+		end
+
+		running.buy = false
+
+		updateToggleVisual(
+			"buy",
+			false
+		)
+
+		toast(
+			"Auto Buy OFF",
+			C.textDim
+		)
+
+		if S.sounds then
+			beep(
+				9118823102
+			)
+		end
+	end
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  AUTO BUY GEAR
+-- ═══════════════════════════════════════════════════════════════════════
+
+local function autoBuyGearPass(
+	selectedItems,
+	workerId
+)
+
+	if not remoteAlive(gearBuyEvent) then
+		refreshRemotes()
+	end
+
+	if not remoteAlive(gearBuyEvent) then
+		return 0
+	end
+
+	local count = 0
+
+	for _,item in ipairs(
+		ALL_GEAR
+	) do
+
+		if
+			not runtimeAlive
+			or not running.gear
+			or workerId ~= gearRunId
+		then
+			break
+		end
+
+		if selectedItems[item.id] == true then
+
+			local ok =
+				fireRemote(
+					gearBuyEvent,
+					item.id,
+					1
+				)
+
+			if ok then
+				count += 1
+				stats.gearBuys += 1
+				lastGearActivity = tick()
+			end
+		end
+	end
+
+	return count
+end
+
+startBuyGear =
+	function()
+
+		if
+			not runtimeAlive
+			or running.gear
+		then
+			return
+		end
+
+		if not next(S.gear) then
+
+			toast(
+				"No gear selected for buy!",
+				C.warn
+			)
+
+			return
+		end
+
+		running.gear = true
+		gearRunId += 1
+
+		local workerId =
+			gearRunId
+
+		if stats.startTime == 0 then
+			stats.startTime =
+				tick()
+		end
+
+		toast(
+			"Auto Buy Gear ON",
+			C.ok
+		)
+
+		if S.sounds then
+			beep(
+				9118823102
+			)
+		end
+
+		updateToggleVisual(
+			"gear",
+			true
+		)
+
+		task.spawn(function()
+
+			while
+				runtimeAlive
+				and running.gear
+				and workerId == gearRunId
+			do
+
+				local ok,err =
+					xpcall(
+						function()
+
+							local selectedItems = {}
+
+							for id,value in pairs(
+								S.gear
+							) do
+
+								if value == true then
+									selectedItems[id] = true
+								end
+							end
+
+							autoBuyGearPass(
+								selectedItems,
+								workerId
+							)
+
+							task.wait(
+								math.max(
+									0.20,
+									tonumber(
+										S.gearBuyDelay
+									)
+									or 0.75
+								)
+							)
+						end,
+						debug.traceback
+					)
+
+				if not ok then
+
+					warn(
+						"[nexus] GEAR worker recovered:\n"
+						.. tostring(
+							err
+						)
+					)
+
+					task.wait(
+						0.5
+					)
+				end
+			end
+		end)
+	end
+
+stopBuyGear =
+	function()
+
+		gearRunId += 1
+		running.gear = false
+
+		updateToggleVisual(
+			"gear",
+			false
+		)
+
+		toast(
+			"Auto Buy Gear OFF",
+			C.textDim
+		)
+
+		if S.sounds then
+			beep(
+				9118823102
+			)
+		end
+	end
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  AUTO BUY AIRSHIP
+-- ═══════════════════════════════════════════════════════════════════════
+
+local AIRSHIP_VISIT_PERIOD = 4500
+local AIRSHIP_OPEN_DURATION = 900
+local AIRSHIP_OFFSET = 0
+
+local airshipAttemptWindow = nil
+local airshipAttempted = {}
+
+local function airshipVisitWindow(now)
+
+	now =
+		now
+		or os.time()
+
+	return math.floor(
+		(
+			now
+			+ AIRSHIP_OFFSET
+		)
+		/ AIRSHIP_VISIT_PERIOD
+	)
+end
+
+local function airshipOpen(
+	window,
+	now
+)
+
+	now =
+		now
+		or os.time()
+
+	local openAt =
+		(
+			window
+			+ 1
+		)
+		* AIRSHIP_VISIT_PERIOD
+		- AIRSHIP_OPEN_DURATION
+		- AIRSHIP_OFFSET
+
+	local closeAt =
+		(
+			window
+			+ 1
+		)
+		* AIRSHIP_VISIT_PERIOD
+		- AIRSHIP_OFFSET
+
+	return
+		now >= openAt
+		and now < closeAt
+end
+
+local function tryAirshipOffer(
+	window,
+	index
+)
+
+	if not remoteAlive(
+		airshipBuyEvent
+	) then
+
+		refreshRemotes()
+	end
+
+	if not remoteAlive(
+		airshipBuyEvent
+	) then
+		return false,
+			"remote unavailable"
+	end
+
+	return fireRemote(
+		airshipBuyEvent,
+		window,
+		index
+	)
+end
+
+local function autoBuyAirshipPass()
+
+	local now =
+		os.time()
+
+	local window =
+		airshipVisitWindow(
+			now
+		)
+
+	if not airshipOpen(
+		window,
+		now
+	) then
+		return 0
+	end
+
+	if
+		airshipAttemptWindow
+		~= window
+	then
+
+		airshipAttemptWindow =
+			window
+
+		table.clear(
+			airshipAttempted
+		)
+	end
+
+	local bought = 0
+
+	for index = 0,5 do
+
+		if
+			not runtimeAlive
+			or not running.airship
+		then
+			break
+		end
+
+		if not airshipAttempted[index] then
+
+			local ok,result =
+				tryAirshipOffer(
+					window,
+					index
+				)
+
+			if ok
+				and result ~= "declined"
+				and result ~= false
+			then
+
+				bought += 1
+				stats.airshipBuys += 1
+				lastAirshipActivity =
+					tick()
+
+				airshipAttempted[index] =
+					true
+
+			elseif ok then
+
+				-- "declined" stays retryable while the ship is open.
+				airshipAttempted[index] =
+					false
+			end
+
+			task.wait(
+				0.08
+			)
+		end
+	end
+
+	return bought
+end
+
+startBuyAirship =
+	function()
+
+		if
+			not runtimeAlive
+			or running.airship
+		then
+			return
+		end
+
+		running.airship = true
+		airshipRunId += 1
+
+		local workerId =
+			airshipRunId
+
+		if stats.startTime == 0 then
+			stats.startTime =
+				tick()
+		end
+
+		toast(
+			"Auto Buy Airship ON",
+			C.ok
+		)
+
+		if S.sounds then
+			beep(
+				9118823102
+			)
+		end
+
+		updateToggleVisual(
+			"airship",
+			true
+		)
+
+		task.spawn(function()
+
+			while
+				runtimeAlive
+				and running.airship
+				and workerId == airshipRunId
+			do
+
+				local ok,err =
+					xpcall(
+						function()
+
+							autoBuyAirshipPass()
+
+							task.wait(
+								2
+							)
+						end,
+						debug.traceback
+					)
+
+				if not ok then
+
+					warn(
+						"[nexus] AIRSHIP worker recovered:\n"
+						.. tostring(
+							err
+						)
+					)
+
+					task.wait(
+						0.5
+					)
+				end
+			end
+		end)
+	end
+
+stopBuyAirship =
+	function()
+
+		airshipRunId += 1
+		running.airship = false
+
+		airshipAttemptWindow =
+			nil
+
+		table.clear(
+			airshipAttempted
+		)
+
+		updateToggleVisual(
+			"airship",
+			false
+		)
+
+		toast(
+			"Auto Buy Airship OFF",
+			C.textDim
+		)
+
+		if S.sounds then
+			beep(
+				9118823102
+			)
+		end
+	end
+
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  EXTRA UI
+-- ═══════════════════════════════════════════════════════════════════════
+
+local flyConnection = nil
+local flyAttachment = nil
+local flyVelocity = nil
+local flyOrientation = nil
+local flyHumanoid = nil
+local flyCharacter = nil
+
+local flyKeys = {
+    W = false,
+    A = false,
+    S = false,
+    D = false,
+    Space = false,
+    LeftControl = false,
+}
+
+local function destroyFlyObjects()
+    for _, obj in ipairs({
+        flyVelocity,
+        flyOrientation,
+        flyAttachment,
+    }) do
+        if obj then
+            pcall(function()
+                obj:Destroy()
+            end)
+        end
+    end
+
+    flyVelocity = nil
+    flyOrientation = nil
+    flyAttachment = nil
+    flyHumanoid = nil
+    flyCharacter = nil
+end
+
+local function setupFlyObjects(character)
+    if not character then
+        return nil
+    end
+
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+
+    if not hrp or not humanoid then
+        return nil
+    end
+
+    if flyCharacter == character
+        and flyAttachment
+        and flyAttachment.Parent == hrp
+        and flyVelocity
+        and flyVelocity.Parent == hrp
+        and flyOrientation
+        and flyOrientation.Parent == hrp
+    then
+        return hrp, humanoid
+    end
+
+    destroyFlyObjects()
+
+    flyCharacter = character
+    flyHumanoid = humanoid
+
+    flyAttachment = Instance.new("Attachment")
+    flyAttachment.Name = "NexusFlyAttachment"
+    flyAttachment.Parent = hrp
+
+    flyVelocity = Instance.new("LinearVelocity")
+    flyVelocity.Name = "NexusFlyVelocity"
+    flyVelocity.Attachment0 = flyAttachment
+    flyVelocity.RelativeTo = Enum.ActuatorRelativeTo.World
+    flyVelocity.MaxForce = math.huge
+    flyVelocity.VectorVelocity = Vector3.zero
+    flyVelocity.Parent = hrp
+
+    flyOrientation = Instance.new("AlignOrientation")
+    flyOrientation.Name = "NexusFlyOrientation"
+    flyOrientation.Attachment0 = flyAttachment
+    flyOrientation.Mode = Enum.OrientationAlignmentMode.OneAttachment
+    flyOrientation.RigidityEnabled = true
+    flyOrientation.MaxTorque = math.huge
+    flyOrientation.Responsiveness = 60
+    flyOrientation.CFrame = hrp.CFrame
+    flyOrientation.Parent = hrp
+
+    humanoid.AutoRotate = false
+    humanoid.PlatformStand = true
+
+    return hrp, humanoid
+end
+
+stopFly =
+function()
+    if flyConnection then
+        pcall(function()
+            flyConnection:Disconnect()
+        end)
+        flyConnection = nil
+    end
+
+    if flyHumanoid and flyHumanoid.Parent then
+        pcall(function()
+            flyHumanoid.PlatformStand = false
+            flyHumanoid.AutoRotate = true
+        end)
+    end
+
+    destroyFlyObjects()
+
+    local char = LP.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+
+    if root then
+        pcall(function()
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+        end)
+    end
+
+    S.fly = false
+end
+
+local function startFly()
+    if flyConnection then
+        return
+    end
+
+    local hrp, humanoid = setupFlyObjects(LP.Character)
+
+    if not hrp or not humanoid then
+        toast("Fly: character not ready", C.warn)
+        return
+    end
+
+    S.fly = true
+
+    flyConnection = trackConnection(
+        RunService.RenderStepped:Connect(function()
+            if not runtimeAlive or not S.fly then
+                stopFly()
+                return
+            end
+
+            local root, currentHumanoid = setupFlyObjects(LP.Character)
+            local camera = workspace.CurrentCamera
+
+            if not root or not currentHumanoid or not camera then
+                return
+            end
+
+            currentHumanoid.PlatformStand = true
+            currentHumanoid.AutoRotate = false
+
+            local dir = Vector3.zero
+            local cf = camera.CFrame
+
+            if flyKeys.W then dir += cf.LookVector end
+            if flyKeys.S then dir -= cf.LookVector end
+            if flyKeys.D then dir += cf.RightVector end
+            if flyKeys.A then dir -= cf.RightVector end
+            if flyKeys.Space then dir += Vector3.new(0, 1, 0) end
+            if flyKeys.LeftControl then dir -= Vector3.new(0, 1, 0) end
+
+            local speed = math.clamp(
+                tonumber(S.flySpeed) or 50,
+                10,
+                150
+            )
+
+            if flyVelocity and flyVelocity.Parent == root then
+                if dir.Magnitude > 0.001 then
+                    flyVelocity.VectorVelocity = dir.Unit * speed
+                else
+                    flyVelocity.VectorVelocity = Vector3.zero
+                end
+            end
+
+            local look = Vector3.new(
+                cf.LookVector.X,
+                0,
+                cf.LookVector.Z
+            )
+
+            if look.Magnitude > 0.001
+                and flyOrientation
+                and flyOrientation.Parent == root
+            then
+                look = look.Unit
+                flyOrientation.CFrame = CFrame.lookAt(
+                    root.Position,
+                    root.Position + look
+                )
+            end
+        end)
+    )
+end
+
+trackConnection(
+    UserInputService.InputBegan:Connect(function(input, gp)
+        if gp then
+            return
+        end
+
+        local key = input.KeyCode.Name
+        if flyKeys[key] ~= nil then
+            flyKeys[key] = true
+        end
+    end)
+)
+
+trackConnection(
+    UserInputService.InputEnded:Connect(function(input)
+        local key = input.KeyCode.Name
+        if flyKeys[key] ~= nil then
+            flyKeys[key] = false
+        end
+    end)
+)
+
+-- Persistent FOV loop. The game can overwrite Camera.FieldOfView;
+-- this immediately restores the configured value and also survives
+-- camera recreation / respawn.
+local fovConnection = trackConnection(
+    RunService.RenderStepped:Connect(function()
+        if not runtimeAlive then
+            return
+        end
+
+        local camera = workspace.CurrentCamera
+        if camera then
+            local target = math.clamp(
+                tonumber(S.fov) or 70,
+                50,
+                120
+            )
+
+            if math.abs(camera.FieldOfView - target) > 0.05 then
+                camera.FieldOfView = target
+            end
+        end
+    end)
+)
+
+local function setFOV(value)
+    S.fov = math.clamp(
+        tonumber(value) or 70,
+        50,
+        120
+    )
+
+    local camera = workspace.CurrentCamera
+    if camera then
+        camera.FieldOfView = S.fov
+    end
+
+    persist()
+end
+
+local function mkInfoCard(title, bodyText)
+
+    local card =
+        Instance.new("Frame")
+
+    card.Size =
+        UDim2.new(
+            1,
+            -12,
+            0,
+            70
+        )
+
+    card.BackgroundColor3 =
+        C.row
+
+    card.BackgroundTransparency = 0.35
+    card.BorderSizePixel = 0
+    card.Parent = scroll
+
+    corner(card, 4)
+
+    local titleLbl =
+        Instance.new("TextLabel")
+
+    titleLbl.Size =
+        UDim2.new(
+            1,
+            -16,
+            0,
+            20
+        )
+
+    titleLbl.Position =
+        UDim2.new(
+            0,
+            8,
+            0,
+            6
+        )
+
+    titleLbl.BackgroundTransparency = 1
+    titleLbl.Text = title
+    titleLbl.TextColor3 = C.accent
+    titleLbl.TextSize = 12
+    titleLbl.Font = FONT_B
+    titleLbl.TextXAlignment = Enum.TextXAlignment.Left
+    titleLbl.Parent = card
+
+    local bodyLbl =
+        Instance.new("TextLabel")
+
+    bodyLbl.Size =
+        UDim2.new(
+            1,
+            -16,
+            0,
+            38
+        )
+
+    bodyLbl.Position =
+        UDim2.new(
+            0,
+            8,
+            0,
+            27
+        )
+
+    bodyLbl.BackgroundTransparency = 1
+    bodyLbl.Text = bodyText
+    bodyLbl.TextColor3 = C.textDim
+    bodyLbl.TextSize = 10
+    bodyLbl.Font = FONT_M
+    bodyLbl.TextWrapped = true
+    bodyLbl.TextXAlignment = Enum.TextXAlignment.Left
+    bodyLbl.TextYAlignment = Enum.TextYAlignment.Top
+    bodyLbl.Parent = card
+
+    return card
+end
+
+local function mkChoiceButton(label, valueName, color)
+
+    local b =
+        Instance.new("TextButton")
+
+    b.Size =
+        UDim2.new(
+            0,
+            82,
+            0,
+            28
+        )
+
+    b.BackgroundColor3 =
+        valueName == S.accentName
+        and color
+        or C.row
+
+    b.Text =
+        label
+
+    b.TextColor3 =
+        valueName == S.accentName
+        and Color3.fromRGB(255,255,255)
+        or C.textDim
+
+    b.TextSize = 10
+    b.Font = FONT_B
+    b.BorderSizePixel = 0
+    b.AutoButtonColor = false
+    b.Parent = rightCol
+
+    corner(b, 3)
+
+    trackConnection(
+        b.MouseButton1Click:
+            Connect(function()
+
+                applyAccentName(valueName)
+                persist()
+
+                if rebuild then
+                    rebuild()
+                end
+
+                toast(
+                    "Accent: " .. valueName,
+                    C.ok
+                )
+            end)
+    )
+
+    return b
+end
+
+local function mkSlider(
+    label,
+    getValue,
+    setValue,
+    minValue,
+    maxValue,
+    step
+)
+
+    local row =
+        Instance.new("Frame")
+
+    row.Size =
+        UDim2.new(
+            1,
+            0,
+            0,
+            42
+        )
+
+    row.BackgroundColor3 =
+        C.row
+
+    row.BackgroundTransparency = 0.35
+    row.BorderSizePixel = 0
+    row.Parent = rightCol
+
+    corner(row, 3)
+
+    local lbl =
+        Instance.new("TextLabel")
+
+    lbl.Size =
+        UDim2.new(
+            1,
+            -70,
+            0,
+            18
+        )
+
+    lbl.Position =
+        UDim2.new(
+            0,
+            8,
+            0,
+            3
+        )
+
+    lbl.BackgroundTransparency = 1
+    lbl.TextColor3 = C.text
+    lbl.TextSize = 10
+    lbl.Font = FONT_M
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.Text = label
+    lbl.Parent = row
+
+    local valueLbl =
+        Instance.new("TextLabel")
+
+    valueLbl.Size =
+        UDim2.new(
+            0,
+            50,
+            0,
+            18
+        )
+
+    valueLbl.Position =
+        UDim2.new(
+            1,
+            -58,
+            0,
+            3
+        )
+
+    valueLbl.BackgroundTransparency = 1
+    valueLbl.TextColor3 = C.accent
+    valueLbl.TextSize = 10
+    valueLbl.Font = FONT_B
+    valueLbl.TextXAlignment = Enum.TextXAlignment.Right
+    valueLbl.Text = tostring(getValue())
+    valueLbl.Parent = row
+
+    local bar =
+        Instance.new("Frame")
+
+    bar.Size =
+        UDim2.new(
+            1,
+            -16,
+            0,
+            6
+        )
+
+    bar.Position =
+        UDim2.new(
+            0,
+            8,
+            1,
+            -13
+        )
+
+    bar.BackgroundColor3 = C.box
+    bar.BorderSizePixel = 0
+    bar.Parent = row
+
+    corner(bar, 4)
+
+    local fill =
+        Instance.new("Frame")
+
+    fill.BackgroundColor3 = C.accent
+    fill.BorderSizePixel = 0
+    fill.Parent = bar
+
+    corner(fill, 4)
+
+    local draggingSlider = false
+
+    local function updateFromX(x)
+
+        local alpha =
+            math.clamp(
+                (x - bar.AbsolutePosition.X)
+                / math.max(1, bar.AbsoluteSize.X),
+                0,
+                1
+            )
+
+        local raw =
+            minValue
+            + (maxValue - minValue) * alpha
+
+        if step and step > 0 then
+            raw =
+                math.floor(
+                    raw / step + 0.5
+                ) * step
+        end
+
+        raw =
+            math.clamp(
+                raw,
+                minValue,
+                maxValue
+            )
+
+        setValue(raw)
+        persist()
+
+        local v =
+            tonumber(
+                getValue()
+            )
+            or minValue
+
+        local pct =
+            math.clamp(
+                (v - minValue)
+                / (maxValue - minValue),
+                0,
+                1
+            )
+
+        fill.Size =
+            UDim2.new(
+                pct,
+                0,
+                1,
+                0
+            )
+
+        valueLbl.Text =
+            tostring(
+                math.floor(v)
+            )
+    end
+
+    local function refresh()
+
+        local v =
+            tonumber(getValue())
+            or minValue
+
+        local pct =
+            math.clamp(
+                (v - minValue)
+                / (maxValue - minValue),
+                0,
+                1
+            )
+
+        fill.Size =
+            UDim2.new(
+                pct,
+                0,
+                1,
+                0
+            )
+
+        valueLbl.Text =
+            tostring(
+                math.floor(v)
+            )
+    end
+
+    trackConnection(
+        bar.InputBegan:
+            Connect(function(input)
+
+                if
+                    input.UserInputType
+                    == Enum.UserInputType.MouseButton1
+                then
+                    draggingSlider = true
+                    updateFromX(input.Position.X)
+                end
+            end)
+    )
+
+    trackConnection(
+        UserInputService.InputChanged:
+            Connect(function(input)
+
+                if
+                    draggingSlider
+                    and
+                    input.UserInputType
+                    == Enum.UserInputType.MouseMovement
+                then
+                    updateFromX(input.Position.X)
+                end
+            end)
+    )
+
+    trackConnection(
+        UserInputService.InputEnded:
+            Connect(function(input)
+
+                if
+                    input.UserInputType
+                    == Enum.UserInputType.MouseButton1
+                then
+                    draggingSlider = false
+                end
+            end)
+    )
+
+    refresh()
+
+    return row
+end
+
+
+local function mkActionBindRow(
+    label,
+    action,
+    getKey,
+    setKey
+)
+
+    local row =
+        Instance.new("Frame")
+
+    row.Size =
+        UDim2.new(
+            1,
+            0,
+            0,
+            34
+        )
+
+    row.BackgroundColor3 = C.row
+    row.BackgroundTransparency = 0.35
+    row.BorderSizePixel = 0
+    row.Parent = rightCol
+
+    corner(row, 3)
+
+    local lbl =
+        Instance.new("TextLabel")
+
+    lbl.Size =
+        UDim2.new(
+            1,
+            -110,
+            1,
+            0
+        )
+
+    lbl.Position =
+        UDim2.new(
+            0,
+            8,
+            0,
+            0
+        )
+
+    lbl.BackgroundTransparency = 1
+    lbl.Text = label
+    lbl.TextColor3 = C.text
+    lbl.TextSize = 10
+    lbl.Font = FONT_M
+    lbl.TextXAlignment =
+        Enum.TextXAlignment.Left
+    lbl.Parent = row
+
+    local btn =
+        Instance.new("TextButton")
+
+    btn.Size =
+        UDim2.new(
+            0,
+            94,
+            0,
+            24
+        )
+
+    btn.Position =
+        UDim2.new(
+            1,
+            -102,
+            0.5,
+            -12
+        )
+
+    btn.BackgroundColor3 = C.bg
+    btn.Text = actionBindName(action)
+    btn.TextColor3 = C.accent
+    btn.TextSize = 10
+    btn.Font = FONT_B
+    btn.BorderSizePixel = 0
+    btn.AutoButtonColor = false
+    btn.Parent = row
+
+    corner(btn, 3)
+
+    local waiting = false
+    local conn
+
+    local function finish()
+        waiting = false
+
+        if conn then
+            pcall(function()
+                conn:Disconnect()
+            end)
+            conn = nil
+        end
+
+        btn.Text = actionBindName(action)
+    end
+
+    trackConnection(
+        btn.MouseButton1Click:
+            Connect(function()
+
+                if waiting then
+                    return
+                end
+
+                waiting = true
+                btn.Text = "PRESS KEY"
+
+                conn =
+                    UserInputService.InputBegan:
+                        Connect(function(input)
+
+                            if
+                                input.UserInputType
+                                ~= Enum.UserInputType.Keyboard
+                            then
+                                return
+                            end
+
+                            local key =
+                                input.KeyCode
+
+                            if key ==
+                                Enum.KeyCode.Unknown
+                            then
+                                return
+                            end
+
+                            setKey(key)
+                            persist()
+                            finish()
+
+                            toast(
+                                label .. ": " .. key.Name,
+                                C.ok
+                            )
+                        end)
+
+                trackConnection(conn)
+            end)
+    )
+
+    return row
+end
+
+local function listConfigNames()
+    local names = {
+        "default"
+    }
+
+    if listfiles and ensureConfigFolder() then
+        local ok, files =
+            pcall(function()
+                return listfiles(CFG_DIR)
+            end)
+
+        if ok and type(files) == "table" then
+            local seen = {
+                default = true
+            }
+
+            for _, path in ipairs(files) do
+                local name =
+                    tostring(path)
+                    :match(
+                        "([^/\\]+)%.json$"
+                    )
+
+                if name
+                    and not seen[name]
+                then
+                    seen[name] = true
+                    table.insert(
+                        names,
+                        name
+                    )
+                end
+            end
+        end
+    end
+
+    table.sort(
+        names,
+        function(a,b)
+            if a == "default" then
+                return true
+            end
+            if b == "default" then
+                return false
+            end
+            return a:lower() < b:lower()
+        end
+    )
+
+    return names
+end
+
+local function applyConfigData(data)
+    if type(data) ~= "table" then
+        return false
+    end
+
+    running.roll = false
+    running.buy = false
+    running.sell = false
+    running.gear = false
+    running.airship = false
+
+    sellRunId += 1
+    gearRunId += 1
+    airshipRunId += 1
+
+    S.sell = type(data.sell) == "table"
+        and data.sell
+        or {}
+
+    S.buy = type(data.buy) == "table"
+        and data.buy
+        or {}
+
+    S.gear = type(data.gear) == "table"
+        and data.gear
+        or {}
+
+    if type(data.buySlots) == "table" then
+        S.buySlots = {}
+
+        for k,v in pairs(data.buySlots) do
+            local n = tonumber(k)
+            if n and n >= 1 and n <= 5 and v then
+                S.buySlots[n] = true
+            end
+        end
+
+        if next(S.buySlots) == nil then
+            S.buySlots[1] = true
+        end
+    end
+
+    S.gameId = tonumber(data.gameId) or S.gameId
+    S.rollDelay = tonumber(data.rollDelay) or S.rollDelay
+    S.buyDelay =
+        math.min(
+            tonumber(data.buyDelay) or S.buyDelay,
+            0.08
+        )
+
+    S.slotDelay = tonumber(data.slotDelay) or 0
+    S.gearBuyDelay =
+        math.max(
+            0.20,
+            tonumber(data.gearBuyDelay)
+            or S.gearBuyDelay
+        )
+
+    S.sellDelay = tonumber(data.sellDelay) or S.sellDelay
+    S.sellEquipDelay =
+        tonumber(data.sellEquipDelay)
+        or S.sellEquipDelay
+
+    S.sniffer = data.sniffer == true
+    S.sounds = data.sounds ~= false
+    S.roundRobin = data.roundRobin == true
+    S.debug = data.debug == true
+    S.filterByMarkers =
+        data.filterByMarkers ~= false
+
+    S.markers =
+        type(data.markers) == "string"
+        and data.markers
+        or S.markers
+
+    S.myPlot =
+        tonumber(data.myPlot)
+        or S.myPlot
+
+    S.flySpeed =
+        tonumber(data.flySpeed)
+        or S.flySpeed
+
+    S.fov =
+        math.clamp(
+            tonumber(data.fov) or S.fov,
+            50,
+            120
+        )
+
+    S.menuBind =
+        type(data.menuBind) == "string"
+        and data.menuBind
+        or S.menuBind
+
+    S.rollBind =
+        type(data.rollBind) == "string"
+        and data.rollBind
+        or S.rollBind
+
+    S.buyBind =
+        type(data.buyBind) == "string"
+        and data.buyBind
+        or S.buyBind
+
+    S.sellBind =
+        type(data.sellBind) == "string"
+        and data.sellBind
+        or S.sellBind
+
+    S.gearBind =
+        type(data.gearBind) == "string"
+        and data.gearBind
+        or S.gearBind
+
+    S.miscBind =
+        type(data.miscBind) == "string"
+        and data.miscBind
+        or S.miscBind
+
+    S.accentName =
+        type(data.accentName) == "string"
+        and data.accentName
+        or S.accentName
+
+    S.notifications =
+        data.notifications ~= false
+
+    S.buyUnknown =
+        data.buyUnknown == true
+
+    applyAccentName(
+        S.accentName
+    )
+
+    S.fly = false
+
+    pcall(function()
+        setFOV(S.fov)
+    end)
+
+    return true
+end
+
+local function saveNamedConfig(name)
+    local safe = sanitizeConfigName(name)
+
+    if not safe then
+        toast(
+            "Config name is empty!",
+            C.warn
+        )
+        return false
+    end
+
+    local path =
+        configFilePath(safe)
+
+    if safe == "default" then
+        toast(
+            "Default is automatic. Use it for latest settings.",
+            C.warn
+        )
+        persist()
+        return true
+    end
+
+    if saveCfg(
+        serializeSettings(),
+        path
+    ) then
+
+        selectedConfigName = safe
+        configNameDraft = safe
+
+        -- Keep default synchronized with the current state.
+        persist()
+
+        toast(
+            "Config saved: " .. safe,
+            C.ok
+        )
+
+        return true
+    end
+
+    toast(
+        "Could not save config.",
+        C.err
+    )
+
+    return false
+end
+
+local function loadNamedConfig(name)
+    local safe =
+        sanitizeConfigName(name)
+
+    if not safe then
+        toast(
+            "Select a config first.",
+            C.warn
+        )
+        return false
+    end
+
+    local path =
+        configFilePath(safe)
+
+    local data =
+        readJsonFile(path)
+
+    if not data then
+        toast(
+            "Config not found: " .. safe,
+            C.err
+        )
+        return false
+    end
+
+    if applyConfigData(data) then
+        selectedConfigName = safe
+        configNameDraft = safe
+
+        persist()
+
+        if rebuild then
+            rebuild()
+        end
+
+        toast(
+            "Config loaded: " .. safe,
+            C.ok
+        )
+
+        return true
+    end
+
+    return false
+end
+
+local function deleteNamedConfig(name)
+    local safe =
+        sanitizeConfigName(name)
+
+    if not safe or safe == "default" then
+        toast(
+            "Default cannot be deleted.",
+            C.warn
+        )
+        return false
+    end
+
+    if not delfile then
+        toast(
+            "Config delete is unavailable.",
+            C.err
+        )
+        return false
+    end
+
+    local path =
+        configFilePath(safe)
+
+    local ok =
+        pcall(function()
+            if isfile(path) then
+                delfile(path)
+            end
+        end)
+
+    if not ok then
+        toast(
+            "Could not delete config.",
+            C.err
+        )
+        return false
+    end
+
+    selectedConfigName = "default"
+    configNameDraft = "default"
+
+    toast(
+        "Config deleted: " .. safe,
+        C.ok
+    )
+
+    if rebuild then
+        rebuild()
+    end
+
+    return true
+end
+
+local function ensureDefaultConfig()
+    local defaultData =
+        readJsonFile(
+            DEFAULT_CFG_FILE
+        )
+
+    if not defaultData then
+        local legacy =
+            readJsonFile(
+                CFG_FILE
+            )
+
+        if legacy then
+            saveCfg(
+                legacy,
+                DEFAULT_CFG_FILE
+            )
+        else
+            persist()
+        end
+    end
+end
+
+ensureDefaultConfig()
+
+local function mkMenuBindRow()
+
+    local row =
+        Instance.new("Frame")
+
+    row.Size =
+        UDim2.new(
+            1,
+            0,
+            0,
+            34
+        )
+
+    row.BackgroundColor3 =
+        C.row
+
+    row.BackgroundTransparency = 0.35
+    row.BorderSizePixel = 0
+    row.Parent = rightCol
+
+    corner(row, 3)
+
+    local lbl =
+        Instance.new("TextLabel")
+
+    lbl.Size =
+        UDim2.new(
+            1,
+            -110,
+            1,
+            0
+        )
+
+    lbl.Position =
+        UDim2.new(
+            0,
+            8,
+            0,
+            0
+        )
+
+    lbl.BackgroundTransparency = 1
+    lbl.Text = "Open / Close menu"
+    lbl.TextColor3 = C.text
+    lbl.TextSize = 10
+    lbl.Font = FONT_M
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.Parent = row
+
+    local btn =
+        Instance.new("TextButton")
+
+    btn.Size =
+        UDim2.new(
+            0,
+            94,
+            0,
+            24
+        )
+
+    btn.Position =
+        UDim2.new(
+            1,
+            -102,
+            0.5,
+            -12
+        )
+
+    btn.BackgroundColor3 = C.bg
+    btn.Text =
+        menuBindName()
+
+    btn.TextColor3 = C.accent
+    btn.TextSize = 10
+    btn.Font = FONT_B
+    btn.BorderSizePixel = 0
+    btn.AutoButtonColor = false
+    btn.Parent = row
+
+    corner(btn, 3)
+
+    local waiting = false
+    local conn
+
+    local function stopBinding()
+
+        waiting = false
+
+        if conn then
+            pcall(function()
+                conn:Disconnect()
+            end)
+            conn = nil
+        end
+
+        btn.Text =
+            menuBindName()
+    end
+
+    trackConnection(
+        btn.MouseButton1Click:
+            Connect(function()
+
+                if waiting then
+                    return
+                end
+
+                waiting = true
+                btn.Text = "PRESS KEY"
+
+                conn =
+                    UserInputService.InputBegan:
+                        Connect(function(input)
+
+                            if
+                                input.UserInputType
+                                ~= Enum.UserInputType.Keyboard
+                            then
+                                return
+                            end
+
+                            local key =
+                                input.KeyCode
+
+                            if key == Enum.KeyCode.Unknown then
+                                return
+                            end
+
+                            S.menuBind =
+                                key.Name
+
+                            persist()
+
+                            stopBinding()
+
+                            toast(
+                                "Menu bind: " .. key.Name,
+                                C.ok
+                            )
+                        end)
+
+                trackConnection(conn)
+            end)
+    )
+
+    return row
+end
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  RIGHT PANEL
+-- ═══════════════════════════════════════════════════════════════════════
+
+rebuildRight =
+	function()
+
+		toggleVisuals = {}
+
+		for _,ch in ipairs(
+			rightCol:GetChildren()
+		) do
+
+			if not ch:IsA(
+				"UIListLayout"
+			)
+				and not ch:IsA(
+					"UIPadding"
+				) then
+
+				ch:Destroy()
+			end
+		end
+
+		if S.tab == "sell" then
+
+			sectionLabel(
+				"SELL MODE"
+			)
+
+			mkToggle(
+				"sell",
+				"Auto Sell",
+				function()
+					return running.sell
+				end,
+				function(
+					value
+				)
+
+					setSellEnabled(
+						value,
+						"ui"
+					)
+				end
+			)
+
+			local countRow =
+				Instance.new(
+					"Frame"
+				)
+
+			countRow.Size =
+				UDim2.new(
+					1,
+					0,
+					0,
+					26
+				)
+
+			countRow.BackgroundColor3 =
+				C.row
+
+			countRow.BackgroundTransparency =
+				0.4
+
+			countRow.BorderSizePixel = 0
+
+			countRow.Parent =
+				rightCol
+
+			corner(
+				countRow,
+				3
+			)
+
+			local countLbl =
+				Instance.new(
+					"TextLabel"
+				)
+
+			countLbl.Size =
+				UDim2.new(
+					1,
+					-16,
+					1,
+					0
+				)
+
+			countLbl.Position =
+				UDim2.new(
+					0,
+					8,
+					0,
+					0
+				)
+
+			countLbl.BackgroundTransparency = 1
+
+			countLbl.TextColor3 =
+				C.ok
+
+			countLbl.TextSize = 10
+			countLbl.Font = FONT_M
+
+			countLbl.TextXAlignment =
+				Enum.TextXAlignment.Left
+
+			countLbl.Parent =
+				countRow
+
+			task.spawn(function()
+
+				while
+					runtimeAlive
+					and countLbl
+					and countLbl.Parent
+				do
+
+					local n = 0
+
+					for _ in pairs(
+						S.sell
+					) do
+						n += 1
+					end
+
+					countLbl.Text =
+						(
+							"Selected: %d · sold: %d · %s"
+						):format(
+							n,
+							stats.sells,
+							running.sell
+							and "RUNNING"
+							or "STOPPED"
+						)
+
+					task.wait(
+						0.5
+					)
+				end
+			end)
+
+			sectionLabel(
+				"TIMING"
+			)
+
+			mkNumberInput(
+				"Equip",
+				function()
+					return S.sellEquipDelay
+				end,
+				function(v)
+					S.sellEquipDelay = v
+				end
+			)
+
+			mkNumberInput(
+				"Sell",
+				function()
+					return S.sellDelay
+				end,
+				function(v)
+					S.sellDelay = v
+				end
+			)
+
+			sectionLabel(
+				"SNIFFER"
+			)
+
+			mkToggle(
+				"sniffer",
+				"Sniffer",
+				function()
+					return S.sniffer
+				end,
+				function(value)
+
+					S.sniffer =
+						value
+
+					if value then
+						startSniffer()
+					else
+						stopSniffer()
+					end
+				end
+			)
+
+			smallLabel(
+				"Hotkey: S = Auto Sell"
+			)
+
+		elseif S.tab == "buy" then
+
+			sectionLabel(
+				"BUY MODE"
+			)
+
+			mkToggle(
+				"roll",
+				"Auto Roll",
+				function()
+					return running.roll
+				end,
+				function(value)
+
+					if value then
+						startRoll()
+					else
+						stopRoll()
+					end
+				end
+			)
+
+			mkToggle(
+				"buy",
+				"Auto Buy",
+				function()
+					return running.buy
+				end,
+				function(value)
+
+					if value then
+						startBuy()
+					else
+						stopBuy()
+					end
+				end
+			)
+
+			mkSlotRow(
+				"Slots (multi-select)"
+			)
+
+			slotsHint =
+				Instance.new(
+					"TextLabel"
+				)
+
+			slotsHint.Size =
+				UDim2.new(
+					1,
+					0,
+					0,
+					14
+				)
+
+			slotsHint.BackgroundTransparency = 1
+
+			slotsHint.Text =
+				"buying: "
+				.. slotsString()
+
+			slotsHint.TextColor3 =
+				C.ok
+
+			slotsHint.TextSize = 10
+			slotsHint.Font = FONT_M
+
+			slotsHint.TextXAlignment =
+				Enum.TextXAlignment.Left
+
+			slotsHint.Parent =
+				rightCol
+
+			updateSlotsHint()
+
+			sectionLabel(
+				"FILTER"
+			)
+
+            mkToggle(
+                "buyUnknown",
+                "Buy unknown display",
+                function()
+                    return S.buyUnknown
+                end,
+                function(value)
+                    S.buyUnknown = value
+                    persist()
+                end
+            )
+
+			mkToggle(
+				"markers",
+				"Filter by rarity markers",
+				function()
+					return S.filterByMarkers
+				end,
+				function(value)
+					S.filterByMarkers =
+						value
+				end
+			)
+
+			mkTextInput(
+				"Markers",
+				function()
+					return S.markers
+				end,
+				function(v)
+					S.markers = v
+				end
+			)
+
+			smallLabel(
+				"comma-separated"
+			)
+
+			mkNumberInput(
+				"My plot #",
+				function()
+					return S.myPlot
+				end,
+				function(v)
+					S.myPlot = v
+				end
+			)
+
+			smallLabel(
+				"0 = autodetect"
+			)
+
+			sectionLabel(
+				"TIMING"
+			)
+
+			mkNumberInput(
+				"Roll",
+				function()
+					return S.rollDelay
+				end,
+				function(v)
+					S.rollDelay = v
+				end
+			)
+
+			mkNumberInput(
+				"Cycle",
+				function()
+					return S.buyDelay
+				end,
+				function(v)
+					S.buyDelay = v
+				end
+			)
+
+			mkNumberInput(
+				"Slot",
+				function()
+					return S.slotDelay
+				end,
+				function(v)
+					S.slotDelay = v
+				end
+			)
+
+            smallLabel(
+                "Instant pass: all ready Purchase prompts are triggered together."
+            )
+
+			sectionLabel(
+				"OPTIONS"
+			)
+
+			mkToggle(
+				"roundRobin",
+				"Round-robin",
+				function()
+					return S.roundRobin
+				end,
+				function(value)
+					S.roundRobin =
+						value
+				end
+			)
+
+			mkToggle(
+				"sounds",
+				"Sounds",
+				function()
+					return S.sounds
+				end,
+				function(value)
+					S.sounds =
+						value
+				end
+			)
+
+			mkToggle(
+				"debug",
+				"Debug",
+				function()
+					return S.debug
+				end,
+				function(value)
+					S.debug =
+						value
+				end
+			)
+
+			smallLabel(
+				"R = Roll · B = Buy"
+			)
+
+        elseif S.tab == "gear" then
+
+            sectionLabel(
+                "GEAR BUY MODE"
+            )
+
+            mkToggle(
+                "gear",
+                "Auto Buy Gear",
+                function()
+                    return running.gear
+                end,
+                function(value)
+                    if value then
+                        startBuyGear()
+                    else
+                        stopBuyGear()
+                    end
+                end
+            )
+
+            sectionLabel(
+                "TIMING"
+            )
+
+            mkNumberInput(
+                "Cycle",
+                function()
+                    return S.gearBuyDelay
+                end,
+                function(v)
+                    S.gearBuyDelay =
+                        math.max(
+                            0.20,
+                            tonumber(v) or 0.75
+                        )
+                    persist()
+                end
+            )
+
+            smallLabel(
+                "Selected gear is sent to requests.buy_gear."
+            )
+
+        elseif S.tab == "airship" then
+
+            sectionLabel(
+                "AIRSHIP BUY MODE"
+            )
+
+            mkToggle(
+                "airship",
+                "Auto Buy All",
+                function()
+                    return running.airship
+                end,
+                function(value)
+                    if value then
+                        startBuyAirship()
+                    else
+                        stopBuyAirship()
+                    end
+                end
+            )
+
+            local airshipStatus =
+                Instance.new("TextLabel")
+
+            airshipStatus.Size =
+                UDim2.new(
+                    1,
+                    0,
+                    0,
+                    44
+                )
+
+            airshipStatus.BackgroundColor3 =
+                C.row
+
+            airshipStatus.BackgroundTransparency =
+                0.4
+
+            airshipStatus.BorderSizePixel = 0
+            airshipStatus.TextColor3 = C.textDim
+            airshipStatus.TextSize = 10
+            airshipStatus.Font = FONT_M
+            airshipStatus.TextWrapped = true
+            airshipStatus.TextXAlignment =
+                Enum.TextXAlignment.Left
+            airshipStatus.TextYAlignment =
+                Enum.TextYAlignment.Center
+            airshipStatus.Parent = rightCol
+
+            corner(
+                airshipStatus,
+                3
+            )
+
+            task.spawn(function()
+                while
+                    runtimeAlive
+                    and airshipStatus.Parent
+                do
+                    local now = os.time()
+                    local window =
+                        airshipVisitWindow(now)
+
+                    if airshipOpen(
+                        window,
+                        now
+                    ) then
+                        airshipStatus.Text =
+                            "Airship: OPEN · auto-buy checks all 6 offers."
+                        airshipStatus.TextColor3 =
+                            C.ok
+                    else
+                        local openAt =
+                            (window + 1)
+                            * AIRSHIP_VISIT_PERIOD
+                            - AIRSHIP_OPEN_DURATION
+                            - AIRSHIP_OFFSET
+
+                        local left =
+                            math.max(
+                                0,
+                                openAt - now
+                            )
+
+                        airshipStatus.Text =
+                            "Airship: en route · opens in "
+                            .. fmtTime(left)
+
+                        airshipStatus.TextColor3 =
+                            C.textDim
+                    end
+
+                    task.wait(1)
+                end
+            end)
+
+            smallLabel(
+                "Uses the game's 6-offer Airship window."
+            )
+
+        elseif S.tab == "misc" then
+
+            sectionLabel("MOVEMENT")
+
+            mkToggle(
+                "fly",
+                "Fly",
+                function()
+                    return S.fly
+                end,
+                function(value)
+                    if value then
+                        startFly()
+                    else
+                        stopFly()
+                    end
+                    persist()
+                end
+            )
+
+            mkNumberInput(
+                "Fly speed",
+                function()
+                    return S.flySpeed
+                end,
+                function(v)
+                    S.flySpeed =
+                        math.clamp(
+                            tonumber(v) or 50,
+                            10,
+                            150
+                        )
+                    persist()
+                end
+            )
+
+            sectionLabel("CAMERA")
+
+            mkSlider(
+                "FOV",
+                function()
+                    return S.fov
+                end,
+                function(v)
+                    setFOV(v)
+                end,
+                50,
+                120,
+                1
+            )
+
+            sectionLabel("OPTIONS")
+
+            mkToggle(
+                "notifications",
+                "Notifications",
+                function()
+                    return S.notifications
+                end,
+                function(value)
+                    S.notifications = value
+                    persist()
+                end
+            )
+
+            smallLabel(
+                "Fly keys: W/A/S/D + Space/Ctrl"
+            )
+
+        elseif S.tab == "settings" then
+
+            sectionLabel("ACCENT COLOR")
+
+            local colorRow =
+                Instance.new("Frame")
+
+            colorRow.Size =
+                UDim2.new(
+                    1,
+                    0,
+                    0,
+                    30
+                )
+
+            colorRow.BackgroundTransparency = 1
+            colorRow.Parent = rightCol
+
+            local colorLayout =
+                Instance.new("UIListLayout")
+
+            colorLayout.FillDirection =
+                Enum.FillDirection.Horizontal
+
+            colorLayout.Padding =
+                UDim.new(
+                    0,
+                    5
+                )
+
+            colorLayout.Parent =
+                colorRow
+
+            local function addColorButton(label, key, col)
+
+                local b =
+                    Instance.new("TextButton")
+
+                b.Size =
+                    UDim2.new(
+                        0,
+                        47,
+                        1,
+                        0
+                    )
+
+                b.BackgroundColor3 =
+                    S.accentName == key
+                    and col
+                    or C.row
+
+                b.Text =
+                    label
+
+                b.TextColor3 =
+                    S.accentName == key
+                    and Color3.fromRGB(
+                        255,
+                        255,
+                        255
+                    )
+                    or C.textDim
+
+                b.TextSize = 9
+                b.Font = FONT_B
+                b.BorderSizePixel = 0
+                b.AutoButtonColor = false
+                b.Parent = colorRow
+
+                corner(
+                    b,
+                    3
+                )
+
+                trackConnection(
+                    b.MouseButton1Click:
+                        Connect(function()
+
+                            applyAccentName(key)
+                            persist()
+
+                            if rebuild then
+                                rebuild()
+                            end
+
+                            refreshThemeVisuals()
+
+                            toast(
+                                "Accent: " .. key,
+                                C.ok
+                            )
+                        end)
+                )
+            end
+
+            addColorButton(
+                "RED",
+                "red",
+                ACCENTS.red.main
+            )
+
+            addColorButton(
+                "PURP",
+                "purple",
+                ACCENTS.purple.main
+            )
+
+            addColorButton(
+                "BLUE",
+                "blue",
+                ACCENTS.blue.main
+            )
+
+            addColorButton(
+                "GREEN",
+                "green",
+                ACCENTS.green.main
+            )
+
+            addColorButton(
+                "ORNG",
+                "orange",
+                ACCENTS.orange.main
+            )
+
+            sectionLabel("KEYBINDS")
+
+            mkActionBindRow(
+                "Auto Sell",
+                "sell",
+                function()
+                    return S.sellBind
+                end,
+                function(key)
+                    setActionBind("sell", key)
+                end
+            )
+
+            mkActionBindRow(
+                "Auto Buy",
+                "buy",
+                function()
+                    return S.buyBind
+                end,
+                function(key)
+                    setActionBind("buy", key)
+                end
+            )
+
+            mkActionBindRow(
+                "Auto Buy Gear",
+                "gear",
+                function()
+                    return S.gearBind
+                end,
+                function(key)
+                    setActionBind("gear", key)
+                end
+            )
+
+            mkActionBindRow(
+                "Auto Roll",
+                "roll",
+                function()
+                    return S.rollBind
+                end,
+                function(key)
+                    setActionBind("roll", key)
+                end
+            )
+
+            mkActionBindRow(
+                "Misc tab",
+                "misc",
+                function()
+                    return S.miscBind
+                end,
+                function(key)
+                    setActionBind("misc", key)
+                end
+            )
+
+            sectionLabel("MENU KEY")
+
+            mkMenuBindRow()
+
+            sectionLabel("CONFIGS")
+
+            mkTextInput(
+                "Config name",
+                function()
+                    return configNameDraft
+                end,
+                function(v)
+                    configNameDraft = tostring(v or "")
+                end
+            )
+
+            local configRow =
+                Instance.new("Frame")
+
+            configRow.Size =
+                UDim2.new(
+                    1,
+                    0,
+                    0,
+                    26
+                )
+
+            configRow.BackgroundColor3 =
+                C.row
+
+            configRow.BackgroundTransparency =
+                0.35
+
+            configRow.BorderSizePixel = 0
+            configRow.Parent = rightCol
+
+            corner(
+                configRow,
+                3
+            )
+
+            local configArrow =
+                Instance.new("TextButton")
+
+            configArrow.Size =
+                UDim2.new(
+                    1,
+                    -8,
+                    1,
+                    -6
+                )
+
+            configArrow.Position =
+                UDim2.new(
+                    0,
+                    4,
+                    0,
+                    3
+                )
+
+            configArrow.BackgroundColor3 =
+                C.bg
+
+            configArrow.Text =
+                selectedConfigName
+                .. "  ▼"
+
+            configArrow.TextColor3 =
+                C.text
+
+            configArrow.TextSize = 10
+            configArrow.Font = FONT_M
+            configArrow.TextXAlignment =
+                Enum.TextXAlignment.Left
+
+            configArrow.BorderSizePixel = 0
+            configArrow.AutoButtonColor = false
+            configArrow.Parent =
+                configRow
+
+            corner(
+                configArrow,
+                3
+            )
+
+            local configList =
+                Instance.new("Frame")
+
+            configList.Size =
+                UDim2.new(
+                    1,
+                    0,
+                    0,
+                    0
+                )
+
+            configList.AutomaticSize =
+                Enum.AutomaticSize.Y
+
+            configList.BackgroundTransparency = 1
+            configList.Visible = false
+            configList.Parent = rightCol
+
+            local configListLayout =
+                Instance.new("UIListLayout")
+
+            configListLayout.SortOrder =
+                Enum.SortOrder.LayoutOrder
+
+            configListLayout.Padding =
+                UDim.new(
+                    0,
+                    3
+                )
+
+            configListLayout.Parent =
+                configList
+
+            local function rebuildConfigList()
+                for _, child in ipairs(
+                    configList:GetChildren()
+                ) do
+                    if not child:IsA(
+                        "UIListLayout"
+                    ) then
+                        child:Destroy()
+                    end
+                end
+
+                for _, name in ipairs(
+                    listConfigNames()
+                ) do
+
+                    local b =
+                        Instance.new(
+                            "TextButton"
+                        )
+
+                    b.Size =
+                        UDim2.new(
+                            1,
+                            0,
+                            0,
+                            24
+                        )
+
+                    b.BackgroundColor3 =
+                        name == selectedConfigName
+                        and C.accentD
+                        or C.row
+
+                    b.Text =
+                        name
+
+                    b.TextColor3 =
+                        name == selectedConfigName
+                        and Color3.fromRGB(
+                            255,
+                            255,
+                            255
+                        )
+                        or C.text
+
+                    b.TextSize = 10
+                    b.Font = FONT_M
+                    b.TextXAlignment =
+                        Enum.TextXAlignment.Left
+                    b.BorderSizePixel = 0
+                    b.AutoButtonColor = false
+                    b.Parent = configList
+
+                    corner(
+                        b,
+                        3
+                    )
+
+                    trackConnection(
+                        b.MouseButton1Click:
+                            Connect(function()
+                                selectedConfigName =
+                                    name
+
+                                configNameDraft =
+                                    name
+
+                                configArrow.Text =
+                                    name
+                                    .. "  ▼"
+
+                                configList.Visible =
+                                    false
+
+                                rebuildConfigList()
+                            end)
+                    )
+                end
+            end
+
+            rebuildConfigList()
+
+            trackConnection(
+                configArrow.MouseButton1Click:
+                    Connect(function()
+                        configList.Visible =
+                            not configList.Visible
+
+                        configArrow.Text =
+                            selectedConfigName
+                            .. (
+                                configList.Visible
+                                and "  ▲"
+                                or "  ▼"
+                            )
+                    end)
+            )
+
+            local cfgButtonsRow =
+                Instance.new("Frame")
+
+            cfgButtonsRow.Size =
+                UDim2.new(
+                    1,
+                    0,
+                    0,
+                    28
+                )
+
+            cfgButtonsRow.BackgroundTransparency = 1
+            cfgButtonsRow.Parent = rightCol
+
+            local cfgLayout =
+                Instance.new("UIListLayout")
+
+            cfgLayout.FillDirection =
+                Enum.FillDirection.Horizontal
+
+            cfgLayout.Padding =
+                UDim.new(
+                    0,
+                    4
+                )
+
+            cfgLayout.Parent =
+                cfgButtonsRow
+
+            local function cfgButton(
+                text,
+                callback
+            )
+                local b =
+                    Instance.new(
+                        "TextButton"
+                    )
+
+                b.Size =
+                    UDim2.new(
+                        0,
+                        78,
+                        1,
+                        0
+                    )
+
+                b.BackgroundColor3 =
+                    C.row
+
+                b.Text =
+                    text
+
+                b.TextColor3 =
+                    C.text
+
+                b.TextSize = 9
+                b.Font = FONT_B
+                b.BorderSizePixel = 0
+                b.AutoButtonColor = false
+                b.Parent =
+                    cfgButtonsRow
+
+                corner(
+                    b,
+                    3
+                )
+
+                trackConnection(
+                    b.MouseEnter:
+                        Connect(function()
+                            b.BackgroundColor3 =
+                                C.rowHov
+                        end)
+                )
+
+                trackConnection(
+                    b.MouseLeave:
+                        Connect(function()
+                            b.BackgroundColor3 =
+                                C.row
+                        end)
+                )
+
+                trackConnection(
+                    b.MouseButton1Click:
+                        Connect(callback)
+                )
+            end
+
+            cfgButton(
+                "SAVE CONFIG",
+                function()
+                    saveNamedConfig(
+                        configNameDraft
+                    )
+
+                    rebuildRight()
+                end
+            )
+
+            cfgButton(
+                "LOAD CONFIG",
+                function()
+                    loadNamedConfig(
+                        selectedConfigName
+                    )
+                end
+            )
+
+            cfgButton(
+                "DELETE CONFIG",
+                function()
+                    deleteNamedConfig(
+                        selectedConfigName
+                    )
+                end
+            )
+
+            smallLabel(
+                "Default always contains the latest settings. It cannot be deleted."
+            )
+
+            sectionLabel("GENERAL")
+
+            mkToggle(
+                "settingsNotifications",
+                "Notifications",
+                function()
+                    return S.notifications
+                end,
+                function(value)
+                    S.notifications = value
+                    persist()
+                end
+            )
+
+            mkInfoCard(
+                "Legacy UI",
+                "This build keeps the original black/red NEXUS layout and adds the new controls inside it."
+            )
+
+            mkInfoCard(
+                "Defaults",
+                "Menu: RightShift  |  FOV: 70  |  Fly speed: 50"
+            )
+
+            smallLabel(
+                "Restarting the script preserves the saved configuration."
+            )
+
+		end
+	end
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  REBUILD
+-- ═══════════════════════════════════════════════════════════════════════
+
+rebuild =
+    function()
+
+        clearScroll()
+
+        if S.tab == "sell" or S.tab == "buy" then
+
+            local stateTable =
+                S.tab == "sell"
+                and S.sell
+                or S.buy
+
+            local collapsedTbl =
+                S.collapsed[
+                    S.tab
+                ]
+
+            for _,cat in ipairs(
+                CATEGORIES
+            ) do
+
+                mkCategory(
+                    scroll,
+                    cat.key,
+                    cat.label,
+                    BY_CAT[
+                        cat.key
+                    ],
+                    stateTable,
+                    collapsedTbl
+                )
+            end
+
+            updateCounter()
+
+        elseif S.tab == "gear" then
+
+            for _,cat in ipairs(
+                GEAR_CATEGORIES
+            ) do
+
+                mkGearCategory(
+                    scroll,
+                    cat.key,
+                    cat.label,
+                    cat.ids
+                )
+            end
+
+            updateCounter()
+
+        elseif S.tab == "airship" then
+
+            counterLbl.Text = "6 offers"
+
+            mkInfoCard(
+                "AUTO BUY AIRSHIP",
+                "Automatically buys all six Airship offers whenever the Airship shop is open."
+            )
+
+            mkInfoCard(
+                "SCHEDULE",
+                "The game source uses a 4500-second visit period and a 900-second open window."
+            )
+
+        elseif S.tab == "misc" then
+
+            counterLbl.Text = "utility"
+
+            mkInfoCard(
+                "MISC",
+                "Fly and camera controls. Fly is local-only and can be disabled at any time."
+            )
+
+            mkInfoCard(
+                "FOV",
+                "Use the slider on the right to set FieldOfView from 50 to 120."
+            )
+
+        elseif S.tab == "settings" then
+
+            counterLbl.Text = "settings"
+
+            mkInfoCard(
+                "SETTINGS",
+                "Change the accent color and the menu hotkey without changing the legacy layout."
+            )
+
+        end
+
+        rebuildRight()
+    end
+
+trackConnection(
+	searchBox:
+		GetPropertyChangedSignal(
+			"Text"
+		):
+		Connect(function()
+
+			searchQuery =
+				searchBox.Text:lower()
+
+			if rebuild then
+				rebuild()
+			end
+
+		end)
+)
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  MINIMIZE
+-- ═══════════════════════════════════════════════════════════════════════
+
+local minCircle = nil
+local minCircleConn = nil
+
+destroyMinCircle =
+	function()
+
+		if minCircleConn then
+
+			pcall(function()
+				minCircleConn:
+					Disconnect()
+			end)
+
+			minCircleConn = nil
+		end
+
+		if minCircle then
+			minCircle:Destroy()
+			minCircle = nil
+		end
+	end
+
+createMinCircle =
+	function()
+
+		if minCircle then
+			return
+		end
+
+		minCircle =
+			Instance.new(
+				"TextButton"
+			)
+
+		minCircle.Name =
+			"NexusMinCircle"
+
+		minCircle.Size =
+			UDim2.new(
+				0,
+				54,
+				0,
+				54
+			)
+
+		minCircle.Position =
+			UDim2.new(
+				0.5,
+				-27,
+				0,
+				14
+			)
+
+		minCircle.BackgroundColor3 =
+			C.accent
+
+		minCircle.Text =
+			"N"
+
+		minCircle.TextColor3 =
+			Color3.fromRGB(
+				255,
+				255,
+				255
+			)
+
+		minCircle.TextSize = 22
+		minCircle.Font = FONT_B
+
+		minCircle.BorderSizePixel = 0
+		minCircle.AutoButtonColor = false
+
+		minCircle.ZIndex = 20
+
+		minCircle.Parent =
+			screen
+
+		corner(
+			minCircle,
+			27
+		)
+
+		stroke(
+			minCircle,
+			C.accentD,
+			2
+		)
+
+		local dragging = false
+		local dragStart
+		local startPos
+		local moved = false
+
+		trackConnection(
+			minCircle.InputBegan:
+				Connect(function(input)
+
+				if
+					input.UserInputType
+					== Enum.UserInputType.MouseButton1
+
+					or
+
+					input.UserInputType
+					== Enum.UserInputType.Touch
+				then
+
+					dragging = true
+					moved = false
+
+					dragStart =
+						input.Position
+
+					startPos =
+						minCircle.Position
+				end
+
+			end)
+		)
+
+		trackConnection(
+			minCircle.InputEnded:
+				Connect(function(input)
+
+				if
+					input.UserInputType
+					== Enum.UserInputType.MouseButton1
+
+					or
+
+					input.UserInputType
+					== Enum.UserInputType.Touch
+				then
+
+					dragging = false
+
+					if not moved then
+						showUI()
+					end
+				end
+
+			end)
+		)
+
+		minCircleConn =
+			trackConnection(
+				UserInputService
+					.InputChanged:
+					Connect(function(input)
+
+					if
+						dragging
+						and
+						(
+							input.UserInputType
+							== Enum.UserInputType.MouseMovement
+
+							or
+
+							input.UserInputType
+							== Enum.UserInputType.Touch
+						)
+					then
+
+						local delta =
+							input.Position
+							- dragStart
+
+						if
+							delta.Magnitude
+							> 4
+						then
+
+							moved = true
+						end
+
+						minCircle.Position =
+							UDim2.new(
+								startPos.X.Scale,
+								startPos.X.Offset
+									+ delta.X,
+
+								startPos.Y.Scale,
+								startPos.Y.Offset
+									+ delta.Y
+							)
+					end
+
+				end)
+			)
+	end
+
+showUI =
+	function()
+
+		main.Visible = true
+
+		destroyMinCircle()
+	end
+
+hideUI =
+	function()
+
+		main.Visible = false
+
+		createMinCircle()
+	end
+
+toggleUI =
+	function()
+
+		if main.Visible then
+			hideUI()
+		else
+			showUI()
+		end
+	end
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  WINDOW DRAG
+-- ═══════════════════════════════════════════════════════════════════════
+
+do
+
+	local dragging = false
+	local dragStart
+	local startPos
+
+	trackConnection(
+		topbar.InputBegan:
+			Connect(function(input)
+
+				if
+					input.UserInputType
+					== Enum.UserInputType.MouseButton1
+				then
+
+					dragging = true
+
+					dragStart =
+						input.Position
+
+					startPos =
+						main.Position
+
+					input.Changed:
+						Connect(function()
+
+						if
+							input.UserInputState
+							== Enum.UserInputState.End
+						then
+
+							dragging = false
+						end
+
+					end)
+				end
+
+			end)
+	)
+
+	trackConnection(
+		UserInputService.InputChanged:
+			Connect(function(input)
+
+			if
+				dragging
+				and
+				input.UserInputType
+					== Enum.UserInputType.MouseMovement
+			then
+
+				local d =
+					input.Position
+					- dragStart
+
+				main.Position =
+					UDim2.new(
+						startPos.X.Scale,
+						startPos.X.Offset
+							+ d.X,
+
+						startPos.Y.Scale,
+						startPos.Y.Offset
+							+ d.Y
+					)
+			end
+
+		end)
+	)
+end
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  HOTKEYS
+-- ═══════════════════════════════════════════════════════════════════════
+
+local function textboxFocused()
+
+	return
+		UserInputService:GetFocusedTextBox()
+		~= nil
+end
+
+local function hotkeyReady(key)
+
+	local now =
+		os.clock()
+
+	if
+		(
+			now
+			- (
+				lastHotkeyTime[key]
+				or 0
+			)
+		)
+		<
+		HOTKEY_DEBOUNCE
+	then
+
+		return false
+	end
+
+	lastHotkeyTime[key] =
+		now
+
+	return true
+end
+
+trackConnection(
+    UserInputService.InputBegan:
+        Connect(function(input,gp)
+
+        if not runtimeAlive then
+            return
+        end
+
+        if gp then
+            return
+        end
+
+        if textboxFocused() then
+            return
+        end
+
+        if
+            input.KeyCode
+            == keyCodeFromName(S.menuBind)
+        then
+
+            toggleUI()
+            return
+        end
+
+        if
+            input.KeyCode
+            == keyCodeFromName(S.rollBind)
+        then
+
+            if not hotkeyReady("R") then
+                return
+            end
+
+            if running.roll then
+                stopRoll()
+            else
+                startRoll()
+            end
+
+            return
+        end
+
+        if
+            input.KeyCode
+            == keyCodeFromName(S.buyBind)
+        then
+
+            if not hotkeyReady("B") then
+                return
+            end
+
+            if running.buy then
+                stopBuy()
+            else
+                startBuy()
+            end
+
+            return
+        end
+
+        if
+            input.KeyCode
+            == keyCodeFromName(S.sellBind)
+        then
+
+            if not hotkeyReady("S") then
+                return
+            end
+
+            setSellEnabled(
+                not running.sell,
+                "hotkey"
+            )
+
+            return
+        end
+
+        if
+            input.KeyCode
+            == keyCodeFromName(S.gearBind)
+        then
+
+            if not hotkeyReady("G") then
+                return
+            end
+
+            if running.gear then
+                stopBuyGear()
+            else
+                startBuyGear()
+            end
+
+            return
+        end
+
+        if
+            input.KeyCode
+            == keyCodeFromName(S.miscBind)
+        then
+
+            if not hotkeyReady("M") then
+                return
+            end
+
+            S.tab = "misc"
+
+            for k,t in pairs(
+                tabButtons
+            ) do
+                local active =
+                    k == "misc"
+
+                t.under.Visible =
+                    active
+
+                t.btn.TextColor3 =
+                    active
+                    and C.accent
+                    or C.textDim
+            end
+
+            showUI()
+
+            if rebuild then
+                rebuild()
+            end
+
+            return
+        end
+
+    end)
+)
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  UI STATE SYNC
+-- ═══════════════════════════════════════════════════════════════════════
+
+task.spawn(function()
+
+	while runtimeAlive do
+
+		updateToggleVisual(
+			"sell",
+			running.sell
+		)
+
+		updateToggleVisual(
+			"roll",
+			running.roll
+		)
+
+		updateToggleVisual(
+			"buy",
+			running.buy
+		)
+
+		updateToggleVisual(
+			"gear",
+			running.gear
+		)
+
+		updateToggleVisual(
+			"airship",
+			running.airship
+		)
+
+		task.wait(
+			0.10
+		)
+	end
+end)
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  STATUS LOOP
+-- ═══════════════════════════════════════════════════════════════════════
+
+task.spawn(function()
+
+	while runtimeAlive do
+
+		refreshStatus()
+
+		task.wait(
+			0.5
+		)
+	end
+end)
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  WATCHDOG
+-- ═══════════════════════════════════════════════════════════════════════
+
+task.spawn(function()
+
+	while runtimeAlive do
+
+		task.wait(
+			5
+		)
+
+		if not runtimeAlive then
+			break
+		end
+
+		local now =
+			tick()
+
+		if running.roll then
+
+			if
+				lastRollActivity > 0
+				and
+				(
+					now
+					- lastRollActivity
+				) > 20
+			then
+
+				refreshRemotes()
+			end
+		end
+
+		if running.buy then
+
+			if
+				lastBuyActivity > 0
+				and
+				(
+					now
+					- lastBuyActivity
+				) > 30
+			then
+
+				-- Buy watchdog ONLY refreshes BUY remote.
+				-- It does NOT start Auto Roll.
+				refreshRemotes()
+			end
+		end
+
+		if running.sell then
+
+			if not remoteAlive(
+				sellEvent
+			) then
+
+				refreshRemotes()
+			end
+		end
+
+		if running.gear then
+
+			if
+				lastGearActivity > 0
+				and (
+					now
+					- lastGearActivity
+				) > 30
+			then
+
+				refreshRemotes()
+			end
+		end
+
+		if running.airship then
+
+			if not remoteAlive(
+				airshipBuyEvent
+			) then
+
+				refreshRemotes()
+			end
+		end
+	end
+end)
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  RUNTIME SHUTDOWN
+-- ═══════════════════════════════════════════════════════════════════════
+
+local shuttingDown = false
+
+_G.NexusRuntime = {
+
+	id = runtimeId,
+
+	shutdown = function()
+
+		if shuttingDown then
+			return
+		end
+
+		shuttingDown = true
+
+		runtimeAlive = false
+
+		running.roll = false
+		running.buy = false
+		running.sell = false
+		running.gear = false
+		running.airship = false
+
+		sellRunId += 1
+		gearRunId += 1
+		airshipRunId += 1
+
+		pcall(function()
+			stopSniffer()
+		end)
+
+		pcall(function()
+			destroyMinCircle()
+		end)
+
+		disconnectAllConnections()
+
+		pcall(function()
+
+			if
+				screen
+				and screen.Parent
+			then
+
+				screen:Destroy()
+			end
+
+		end)
+	end
+}
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  START
+-- ═══════════════════════════════════════════════════════════════════════
+
+refreshRemotes()
+
+setFOV(S.fov)
+
+if S.fly then
+    S.fly = false
+end
+
+rebuild()
+
+refreshStatus()
+
+print(
+	"════════════════════════════════════════════════════════════"
+)
+
+print(
+	"[nexus] loaded v7.0.0"
+)
+
+print(
+	"[nexus] runtime:",
+	runtimeId
+)
+
+print(
+	"[nexus] AUTO BUY -> NO ROLL: ENABLED"
+)
+
+print(
+	"[nexus] AUTO BUY only checks slots + purchases"
+)
+
+print(
+	"[nexus] AUTO ROLL is completely independent"
+)
+
+print(
+	"[nexus] Anti-AFK: ENABLED"
+)
+
+print(
+	"[nexus] Self-healing remotes: ENABLED"
+)
+
+print(
+	"[nexus] UI: legacy black/red 900x680 + 6 tabs + scrolling right panel"
+)
+
+print(
+	"[nexus] rollEvent:",
+	rollEvent ~= nil
+)
+
+print(
+	"[nexus] purchaseEvent:",
+	purchaseEvent ~= nil
+)
+
+print(
+	"[nexus] sellEvent:",
+	sellEvent ~= nil
+)
+
+print(
+	"[nexus] UI ready"
+)
+
+print(
+	"════════════════════════════════════════════════════════════"
+)
